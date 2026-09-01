@@ -9,6 +9,8 @@ import random
 import time
 import os
 import requests
+import hmac
+import hashlib
 
 app = FastAPI(title="HWC Prediction API")
 
@@ -23,10 +25,11 @@ model    = joblib.load("P5model.pkl")
 scaler   = joblib.load("P5scaler.pkl")
 FEATURES = joblib.load("P5feature_columns.pkl")
 
-otp_store = {}  # email -> (otp, expiry_timestamp)
-
 BREVO_API_KEY = os.environ.get("BREVO_API_KEY")
 SENDER_EMAIL = os.environ.get("SENDER_EMAIL")  # must match your verified Brevo sender
+
+OTP_SECRET = os.environ.get("OTP_SECRET")  # any long random string, set on Render
+OTP_STEP_SECONDS = 300  # each code is valid for a 5-minute window
 
 # ── Urban zones → always LOW ─────────────────────────────────────
 URBAN_ZONES = [
@@ -174,85 +177,4 @@ def run_prediction(lat: float, lon: float):
     feats    = build_features(lat, lon, NDVI, NDWI, elev, slope, df, dw, dr)
     dfx      = pd.DataFrame([feats], columns=FEATURES)
     prob     = float(model.predict_proba(scaler.transform(dfx))[0][1] * 100)
-    risk     = "HIGH" if prob >= 70 else "MEDIUM" if prob >= 40 else "LOW"
-    location = get_location_name(lat, lon)
-    driver   = "NDVI" if NDVI > 0.65 else "dist_forest"
-
-    return {
-        "risk":        risk,
-        "probability": round(prob, 2),
-        "location":    location,
-        "driver":      driver,
-        "lat":         lat,
-        "lon":         lon,
-    }
-
-@app.get("/health")
-def health():
-    return {"status": "ok"}
-
-@app.get("/")
-def root():
-    return {"name": "HWC Prediction API", "status": "live"}
-
-@app.get("/predict")
-def predict_get(lat: float, lon: float):
-    return run_prediction(lat, lon)
-
-class PredictRequest(BaseModel):
-    lat: float
-    lon: float
-
-@app.post("/predict")
-def predict_post(req: PredictRequest):
-    return run_prediction(req.lat, req.lon)
-
-class EmailRequest(BaseModel):
-    email: str
-
-class VerifyRequest(BaseModel):
-    email: str
-    otp: str
-
-def send_email_otp(to_email: str, otp: str):
-    response = requests.post(
-        "https://api.brevo.com/v3/smtp/email",
-        headers={
-            "api-key": BREVO_API_KEY,
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        },
-        json={
-            "sender": {"email": SENDER_EMAIL, "name": "HWC Alert"},
-            "to": [{"email": to_email}],
-            "subject": "HWC Alert - Your Login Code",
-            "textContent": f"Your HWC Alert verification code is: {otp}\n\nExpires in 5 minutes.",
-        },
-        timeout=15,
-    )
-    if response.status_code >= 300:
-        raise Exception(f"Brevo API error {response.status_code}: {response.text}")
-
-@app.post("/send-otp")
-def send_otp(req: EmailRequest):
-    otp = str(random.randint(100000, 999999))
-    otp_store[req.email] = (otp, time.time() + 300)
-    try:
-        send_email_otp(req.email, otp)
-    except Exception as e:
-        return {"error": f"Failed to send email: {e}"}
-    return {"message": "OTP sent"}
-
-@app.post("/verify-otp")
-def verify_otp(req: VerifyRequest):
-    record = otp_store.get(req.email)
-    if not record:
-        return {"error": "No OTP requested for this email"}
-    otp, expiry = record
-    if time.time() > expiry:
-        del otp_store[req.email]
-        return {"error": "OTP expired"}
-    if req.otp != otp:
-        return {"error": "Incorrect OTP"}
-    del otp_store[req.email]
-    return {"message": "Verified"}
+    risk     = "HIGH" if
