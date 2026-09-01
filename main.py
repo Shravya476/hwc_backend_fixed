@@ -8,6 +8,7 @@ import math
 import random
 import time
 import smtplib
+import os
 from email.mime.text import MIMEText
 
 app = FastAPI(title="HWC Prediction API")
@@ -25,8 +26,8 @@ FEATURES = joblib.load("P5feature_columns.pkl")
 
 otp_store = {}  # email -> (otp, expiry_timestamp)
 
-SMTP_EMAIL = "jannu3385@gmail.com"
-SMTP_PASSWORD = "SravyaHindu@_0508"
+SMTP_EMAIL = os.environ.get("SMTP_EMAIL")
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD")
 
 # ── Urban zones → always LOW ─────────────────────────────────────
 URBAN_ZONES = [
