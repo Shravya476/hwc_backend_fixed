@@ -26,7 +26,7 @@ FEATURES = joblib.load("P5feature_columns.pkl")
 otp_store = {}  # email -> (otp, expiry_timestamp)
 
 BREVO_API_KEY = os.environ.get("BREVO_API_KEY")
-SENDER_EMAIL = os.environ.get("SENDER_EMAIL")  # e.g. jannu3385@gmail.com — must match your verified Brevo sender
+SENDER_EMAIL = os.environ.get("SENDER_EMAIL")  # must match your verified Brevo sender
 
 # ── Urban zones → always LOW ─────────────────────────────────────
 URBAN_ZONES = [
