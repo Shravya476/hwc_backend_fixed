@@ -7,9 +7,8 @@ import pandas as pd
 import math
 import random
 import time
-import smtplib
 import os
-from email.mime.text import MIMEText
+import requests
 
 app = FastAPI(title="HWC Prediction API")
 
@@ -26,8 +25,8 @@ FEATURES = joblib.load("P5feature_columns.pkl")
 
 otp_store = {}  # email -> (otp, expiry_timestamp)
 
-SMTP_EMAIL = os.environ.get("SMTP_EMAIL")
-SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD")
+BREVO_API_KEY = os.environ.get("BREVO_API_KEY")
+SENDER_EMAIL = os.environ.get("SENDER_EMAIL")  # e.g. jannu3385@gmail.com — must match your verified Brevo sender
 
 # ── Urban zones → always LOW ─────────────────────────────────────
 URBAN_ZONES = [
@@ -216,13 +215,23 @@ class VerifyRequest(BaseModel):
     otp: str
 
 def send_email_otp(to_email: str, otp: str):
-    msg = MIMEText(f"Your HWC Alert verification code is: {otp}\n\nExpires in 5 minutes.")
-    msg["Subject"] = "HWC Alert - Your Login Code"
-    msg["From"] = SMTP_EMAIL
-    msg["To"] = to_email
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-        server.login(SMTP_EMAIL, SMTP_PASSWORD)
-        server.sendmail(SMTP_EMAIL, to_email, msg.as_string())
+    response = requests.post(
+        "https://api.brevo.com/v3/smtp/email",
+        headers={
+            "api-key": BREVO_API_KEY,
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+        json={
+            "sender": {"email": SENDER_EMAIL, "name": "HWC Alert"},
+            "to": [{"email": to_email}],
+            "subject": "HWC Alert - Your Login Code",
+            "textContent": f"Your HWC Alert verification code is: {otp}\n\nExpires in 5 minutes.",
+        },
+        timeout=15,
+    )
+    if response.status_code >= 300:
+        raise Exception(f"Brevo API error {response.status_code}: {response.text}")
 
 @app.post("/send-otp")
 def send_otp(req: EmailRequest):
