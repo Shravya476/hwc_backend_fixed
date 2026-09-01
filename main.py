@@ -5,6 +5,10 @@ import joblib
 import numpy as np
 import pandas as pd
 import math
+import random
+import time
+import smtplib
+from email.mime.text import MIMEText
 
 app = FastAPI(title="HWC Prediction API")
 
@@ -18,6 +22,11 @@ app.add_middleware(
 model    = joblib.load("P5model.pkl")
 scaler   = joblib.load("P5scaler.pkl")
 FEATURES = joblib.load("P5feature_columns.pkl")
+
+otp_store = {}  # email -> (otp, expiry_timestamp)
+
+SMTP_EMAIL = "youremail@gmail.com"
+SMTP_PASSWORD = "your-16-char-app-password"
 
 # ── Urban zones → always LOW ─────────────────────────────────────
 URBAN_ZONES = [
@@ -58,20 +67,20 @@ FOREST_ZONES = [
     (11.5, 77.2, 0.8,  0.74, 820,  16, 0.3, 0.5, 2.2, "Sathyamangalam"),
     (10.5, 76.9, 0.8,  0.80, 880,  17, 0.2, 0.4, 2.0, "Anamalai"),
     (11.4, 76.7, 0.8,  0.78, 1100, 24, 0.2, 0.3, 2.5, "Nilgiris"),
-    (13.5, 75.7, 0.8,  0.77, 830,  14, 0.2, 0.4, 2.0, "Bhadra"),    # expanded + moved
-    (13.3, 75.8, 0.7,  0.80, 900,  16, 0.2, 0.3, 2.0, "Chikmagalur Forest"),  # NEW
+    (13.5, 75.7, 0.8,  0.77, 830,  14, 0.2, 0.4, 2.0, "Bhadra"),
+    (13.3, 75.8, 0.7,  0.80, 900,  16, 0.2, 0.3, 2.0, "Chikmagalur Forest"),
     (12.6, 75.7, 0.7,  0.83, 1000, 22, 0.2, 0.3, 2.0, "Pushpagiri"),
     (14.0, 74.8, 0.7,  0.80, 680,  16, 0.2, 0.2, 2.5, "Sharavathi"),
     (13.4, 75.1, 0.7,  0.85, 820,  22, 0.2, 0.3, 2.5, "Agumbe"),
     (14.6, 74.8, 0.7,  0.78, 600,  18, 0.3, 0.4, 3.0, "Sirsi"),
     (11.2, 77.5, 0.7,  0.79, 940,  20, 0.2, 0.3, 2.5, "Kalakad"),
     (12.0, 75.5, 0.8,  0.80, 850,  18, 0.2, 0.3, 2.0, "Coorg Buffer"),
-    (12.5, 76.0, 0.7,  0.81, 870,  19, 0.2, 0.3, 2.0, "Kabini"),    # NEW
-    (12.2, 75.9, 0.7,  0.82, 880,  20, 0.2, 0.3, 2.0, "Brahmagiri"), # NEW
+    (12.5, 76.0, 0.7,  0.81, 870,  19, 0.2, 0.3, 2.0, "Kabini"),
+    (12.2, 75.9, 0.7,  0.82, 880,  20, 0.2, 0.3, 2.0, "Brahmagiri"),
     (11.0, 76.5, 0.7,  0.78, 820,  16, 0.2, 0.4, 2.0, "Palakkad Gap"),
     (10.8, 76.7, 0.7,  0.76, 750,  14, 0.3, 0.4, 2.0, "Silent Valley"),
-    (15.2, 74.6, 0.7,  0.79, 580,  17, 0.3, 0.4, 2.5, "Dandeli"),   # NEW
-    (12.4, 76.0, 0.9,  0.82, 860,  18, 0.2, 0.3, 2.0, "Namdroling Area"), # NEW
+    (15.2, 74.6, 0.7,  0.79, 580,  17, 0.3, 0.4, 2.5, "Dandeli"),
+    (12.4, 76.0, 0.9,  0.82, 860,  18, 0.2, 0.3, 2.0, "Namdroling Area"),
 ]
 
 def is_urban(lat, lon):
@@ -150,7 +159,6 @@ def get_location_name(lat, lon):
     return best_name
 
 def run_prediction(lat: float, lon: float):
-    # Urban check first — always LOW
     urban, urban_name = is_urban(lat, lon)
     if urban:
         return {
@@ -198,3 +206,43 @@ class PredictRequest(BaseModel):
 @app.post("/predict")
 def predict_post(req: PredictRequest):
     return run_prediction(req.lat, req.lon)
+
+class EmailRequest(BaseModel):
+    email: str
+
+class VerifyRequest(BaseModel):
+    email: str
+    otp: str
+
+def send_email_otp(to_email: str, otp: str):
+    msg = MIMEText(f"Your HWC Alert verification code is: {otp}\n\nExpires in 5 minutes.")
+    msg["Subject"] = "HWC Alert - Your Login Code"
+    msg["From"] = SMTP_EMAIL
+    msg["To"] = to_email
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+        server.login(SMTP_EMAIL, SMTP_PASSWORD)
+        server.sendmail(SMTP_EMAIL, to_email, msg.as_string())
+
+@app.post("/send-otp")
+def send_otp(req: EmailRequest):
+    otp = str(random.randint(100000, 999999))
+    otp_store[req.email] = (otp, time.time() + 300)
+    try:
+        send_email_otp(req.email, otp)
+    except Exception as e:
+        return {"error": f"Failed to send email: {e}"}
+    return {"message": "OTP sent"}
+
+@app.post("/verify-otp")
+def verify_otp(req: VerifyRequest):
+    record = otp_store.get(req.email)
+    if not record:
+        return {"error": "No OTP requested for this email"}
+    otp, expiry = record
+    if time.time() > expiry:
+        del otp_store[req.email]
+        return {"error": "OTP expired"}
+    if req.otp != otp:
+        return {"error": "Incorrect OTP"}
+    del otp_store[req.email]
+    return {"message": "Verified"}
