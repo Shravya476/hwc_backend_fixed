@@ -25,8 +25,8 @@ FEATURES = joblib.load("P5feature_columns.pkl")
 
 otp_store = {}  # email -> (otp, expiry_timestamp)
 
-SMTP_EMAIL = "youremail@gmail.com"
-SMTP_PASSWORD = "your-16-char-app-password"
+SMTP_EMAIL = "jannu3385@gmail.com"
+SMTP_PASSWORD = "SravyaHindu@0508"
 
 # ── Urban zones → always LOW ─────────────────────────────────────
 URBAN_ZONES = [
