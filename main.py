@@ -91,23 +91,45 @@ FOREST_ZONES = [
     (12.4, 76.0, 0.9,  0.82, 860,  18, 0.2, 0.3, 2.0, "Namdroling Area", "elephant"),
 ]
 
-# ── Named reserves outside the South-India zone list, used only for
-# time-of-day species-profile lookup (not terrain estimation, since real
-# terrain now comes from live OSM/elevation data everywhere). ──
-# (lat, lon, radius_deg, profile, name)
+# ── Named reserves outside the South-India zone list. Used for BOTH
+# time-of-day species-profile lookup AND terrain fallback estimation
+# (previously these only had a time-profile, so when the live OSM/
+# elevation fetch failed — which it does for every request in practice —
+# these locations fell through to a flat "middle of nowhere" default of
+# NDVI=0.18/dist_forest=9km, making real conflict zones like Pilibhit
+# structurally impossible to score as risky. Values below are
+# approximate, based on each reserve's known forest type/terrain.)
+# fields: lat, lon, radius_deg, profile, name, NDVI, elev(m), slope(%),
+#         dist_forest(km), dist_water(km), dist_road(km)
 NAMED_TIME_ZONES = [
-    (28.62, 79.80, 0.4, "diurnal_worker", "Pilibhit Tiger Reserve"),  # documented daytime tiger attacks on farm workers
-    (29.53, 78.77, 0.5, "mixed",          "Corbett"),
-    (28.52, 80.60, 0.4, "mixed",          "Dudhwa"),
-    (26.58, 93.17, 0.5, "elephant",       "Kaziranga"),
-    (22.33, 80.63, 0.4, "carnivore",      "Kanha"),
-    (23.68, 80.95, 0.3, "carnivore",      "Bandhavgarh"),
-    (26.02, 76.50, 0.3, "carnivore",      "Ranthambore"),
-    (21.60, 86.30, 0.4, "mixed",          "Similipal"),
-    (21.90, 88.90, 0.5, "diurnal_worker", "Sundarbans"),
-    (21.13, 70.80, 0.3, "carnivore",      "Gir"),
-    (9.46,  77.24, 0.3, "elephant",       "Periyar"),
-    (26.72, 90.98, 0.4, "elephant",       "Manas"),
+    (28.62, 79.80, 0.4, "diurnal_worker", "Pilibhit Tiger Reserve",
+     0.72, 150, 3,  0.3, 2.0, 1.0),
+    (29.53, 78.77, 0.5, "mixed",          "Corbett",
+     0.78, 600, 15, 0.2, 1.5, 1.5),
+    (28.52, 80.60, 0.4, "mixed",          "Dudhwa",
+     0.74, 150, 3,  0.2, 2.0, 1.0),
+    (26.58, 93.17, 0.5, "elephant",       "Kaziranga",
+     0.70, 60,  1,  0.3, 0.5, 2.0),
+    (22.33, 80.63, 0.4, "carnivore",      "Kanha",
+     0.76, 600, 8,  0.2, 3.0, 2.0),
+    (23.68, 80.95, 0.3, "carnivore",      "Bandhavgarh",
+     0.74, 800, 12, 0.2, 3.0, 2.0),
+    (26.02, 76.50, 0.3, "carnivore",      "Ranthambore",
+     0.55, 400, 10, 0.3, 2.0, 2.0),
+    (21.60, 86.30, 0.4, "mixed",          "Similipal",
+     0.78, 600, 12, 0.2, 3.0, 3.0),
+    (21.90, 88.90, 0.5, "diurnal_worker", "Sundarbans",
+     0.68, 2,   0.5,0.1, 0.2, 5.0),
+    (21.13, 70.80, 0.3, "carnivore",      "Gir",
+     0.60, 300, 8,  0.2, 3.0, 2.0),
+    (9.46,  77.24, 0.3, "elephant",       "Periyar",
+     0.82, 900, 20, 0.1, 1.0, 2.0),
+    (26.72, 90.98, 0.4, "elephant",       "Manas",
+     0.76, 150, 5,  0.2, 1.0, 2.0),
+    (20.23, 79.40, 0.5, "carnivore",      "Tadoba-Andhari (Chandrapur)",
+     0.72, 300, 8,  0.2, 2.5, 1.5),
+    (21.33, 77.20, 0.4, "carnivore",      "Melghat",
+     0.75, 500, 12, 0.2, 3.0, 2.0),
 ]
 
 # ── Coarse regional fallback profile when far from any named zone ──
@@ -220,8 +242,13 @@ def get_real_terrain(lat, lon):
     return data
 
 def estimate_features_fallback(lat, lon):
-    """Old zone-blend estimate, used only if live OSM/elevation calls fail."""
+    """Old zone-blend estimate, used only if live OSM/elevation calls fail
+    (in practice, this runs for almost every request). Checks South-India
+    FOREST_ZONES first, then the broader-India NAMED_TIME_ZONES (Pilibhit,
+    Tadoba, Sundarbans, etc.), and only uses the generic "middle of
+    nowhere" default if the point isn't near any known reserve."""
     in_ghats = (74.0 <= lon <= 77.5) and (10.0 <= lat <= 15.5)
+
     best_dist, best_zone = float('inf'), None
     for zone in FOREST_ZONES:
         d = math.sqrt((lat - zone[0])**2 + (lon - zone[1])**2)
@@ -237,7 +264,34 @@ def estimate_features_fallback(lat, lon):
         df    = best_zone[6]*blend + 9.0*(1-blend)
         dw    = best_zone[7]*blend + 5.0*(1-blend)
         dr    = best_zone[8]*blend + 0.4*(1-blend)
-    elif in_ghats:
+        return NDVI, NDWI, elev, slope, df, dw, dr
+
+    # Not near a South-India forest zone — check the broader-India named
+    # reserves (Pilibhit, Tadoba, Sundarbans, etc.) before giving up.
+    best_dist2, best_named = float('inf'), None
+    for zone in NAMED_TIME_ZONES:
+        zlat, zlon, radius, _profile, _name = zone[:5]
+        terrain = zone[5:]
+        if len(terrain) < 6:
+            continue  # zone has no terrain data, skip
+        d = math.sqrt((lat - zlat)**2 + (lon - zlon)**2)
+        if d < best_dist2:
+            best_dist2, best_named = d, (radius, terrain)
+
+    if best_named is not None:
+        radius, (ndvi, elev, slope, df, dw, dr) = best_named
+        if best_dist2 <= radius:
+            blend = 1.0 - (best_dist2 / radius)
+            NDVI  = ndvi*blend + 0.18*(1-blend)
+            NDWI  = 0.30*blend + 0.08*(1-blend)
+            elev  = elev*blend + 300*(1-blend)
+            slope = slope*blend + 2*(1-blend)
+            df    = df*blend + 9.0*(1-blend)
+            dw    = dw*blend + 5.0*(1-blend)
+            dr    = dr*blend + 0.4*(1-blend)
+            return NDVI, NDWI, elev, slope, df, dw, dr
+
+    if in_ghats:
         f = min(1.0, best_dist / 2.0)
         NDVI, NDWI, elev, slope = 0.60-f*0.25, 0.30-f*0.10, 600-f*300, 12-f*8
         df, dw, dr = 1.5+f*3.0, 0.8+f*2.0, 2.0-f*1.0
@@ -284,7 +338,7 @@ def get_time_profile(lat, lon):
     if best_dist <= 0.5:
         return best_profile
 
-    for zlat, zlon, radius, profile, _name in NAMED_TIME_ZONES:
+    for zlat, zlon, radius, profile, _name, *_terrain in NAMED_TIME_ZONES:
         if math.sqrt((lat - zlat)**2 + (lon - zlon)**2) <= radius:
             return profile
 
@@ -306,7 +360,8 @@ def run_prediction(lat: float, lon: float, hour: Optional[int] = None):
     used_fallback = False
     try:
         NDVI, NDWI, elev, slope, df, dw, dr = get_real_terrain(lat, lon)
-    except Exception:
+    except Exception as e:
+        print(f"[terrain] live OSM/elevation fetch failed for ({lat},{lon}): {e}")
         NDVI, NDWI, elev, slope, df, dw, dr = estimate_features_fallback(lat, lon)
         used_fallback = True
 
