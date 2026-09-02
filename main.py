@@ -91,12 +91,31 @@ FOREST_ZONES = [
     (12.4, 76.0, 0.9,  0.82, 860,  18, 0.2, 0.3, 2.0, "Namdroling Area", "elephant"),
 ]
 
+# ── Named reserves outside the South-India zone list, used only for
+# time-of-day species-profile lookup (not terrain estimation, since real
+# terrain now comes from live OSM/elevation data everywhere). ──
+# (lat, lon, radius_deg, profile, name)
+NAMED_TIME_ZONES = [
+    (28.62, 79.80, 0.4, "diurnal_worker", "Pilibhit Tiger Reserve"),  # documented daytime tiger attacks on farm workers
+    (29.53, 78.77, 0.5, "mixed",          "Corbett"),
+    (28.52, 80.60, 0.4, "mixed",          "Dudhwa"),
+    (26.58, 93.17, 0.5, "elephant",       "Kaziranga"),
+    (22.33, 80.63, 0.4, "carnivore",      "Kanha"),
+    (23.68, 80.95, 0.3, "carnivore",      "Bandhavgarh"),
+    (26.02, 76.50, 0.3, "carnivore",      "Ranthambore"),
+    (21.60, 86.30, 0.4, "mixed",          "Similipal"),
+    (21.90, 88.90, 0.5, "diurnal_worker", "Sundarbans"),
+    (21.13, 70.80, 0.3, "carnivore",      "Gir"),
+    (9.46,  77.24, 0.3, "elephant",       "Periyar"),
+    (26.72, 90.98, 0.4, "elephant",       "Manas"),
+]
+
 # ── Coarse regional fallback profile when far from any named zone ──
 # (min_lat, max_lat, min_lon, max_lon, profile)
 REGION_PROFILES = [
     (8.0, 16.0, 74.0, 77.5, "elephant"),     # Western Ghats belt
     (18.0, 24.0, 77.0, 83.0, "carnivore"),   # Central India tiger landscape
-    (26.0, 30.0, 77.0, 89.0, "elephant"),    # Terai / Himalayan foothills
+    (26.0, 30.0, 77.0, 89.0, "mixed"),       # Terai / Himalayan foothills (specific reserves override above)
     (21.0, 23.0, 88.0, 90.5, "diurnal_worker"),  # Sundarbans coastal
     (24.0, 29.0, 89.0, 97.0, "carnivore"),   # Northeast India
 ]
@@ -264,6 +283,11 @@ def get_time_profile(lat, lon):
             best_dist, best_profile = d, zone[10]
     if best_dist <= 0.5:
         return best_profile
+
+    for zlat, zlon, radius, profile, _name in NAMED_TIME_ZONES:
+        if math.sqrt((lat - zlat)**2 + (lon - zlon)**2) <= radius:
+            return profile
+
     for min_lat, max_lat, min_lon, max_lon, profile in REGION_PROFILES:
         if min_lat <= lat <= max_lat and min_lon <= lon <= max_lon:
             return profile
