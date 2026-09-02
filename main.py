@@ -102,33 +102,33 @@ FOREST_ZONES = [
 # fields: lat, lon, radius_deg, profile, name, NDVI, elev(m), slope(%),
 #         dist_forest(km), dist_water(km), dist_road(km)
 NAMED_TIME_ZONES = [
-    (28.62, 79.80, 0.4, "diurnal_worker", "Pilibhit Tiger Reserve",
+    (28.62, 79.80, 0.7, "diurnal_worker", "Pilibhit Tiger Reserve",
      0.72, 150, 3,  0.3, 2.0, 1.0),
-    (29.53, 78.77, 0.5, "mixed",          "Corbett",
+    (29.53, 78.77, 0.8, "mixed",          "Corbett",
      0.78, 600, 15, 0.2, 1.5, 1.5),
-    (28.52, 80.60, 0.4, "mixed",          "Dudhwa",
+    (28.52, 80.60, 0.7, "mixed",          "Dudhwa",
      0.74, 150, 3,  0.2, 2.0, 1.0),
-    (26.58, 93.17, 0.5, "elephant",       "Kaziranga",
+    (26.58, 93.17, 0.8, "elephant",       "Kaziranga",
      0.70, 60,  1,  0.3, 0.5, 2.0),
-    (22.33, 80.63, 0.4, "carnivore",      "Kanha",
+    (22.33, 80.63, 0.7, "carnivore",      "Kanha",
      0.76, 600, 8,  0.2, 3.0, 2.0),
-    (23.68, 80.95, 0.3, "carnivore",      "Bandhavgarh",
+    (23.68, 80.95, 0.6, "carnivore",      "Bandhavgarh",
      0.74, 800, 12, 0.2, 3.0, 2.0),
-    (26.02, 76.50, 0.3, "carnivore",      "Ranthambore",
+    (26.02, 76.50, 0.6, "carnivore",      "Ranthambore",
      0.55, 400, 10, 0.3, 2.0, 2.0),
-    (21.60, 86.30, 0.4, "mixed",          "Similipal",
+    (21.60, 86.30, 0.7, "mixed",          "Similipal",
      0.78, 600, 12, 0.2, 3.0, 3.0),
-    (21.90, 88.90, 0.5, "diurnal_worker", "Sundarbans",
+    (21.90, 88.90, 0.8, "diurnal_worker", "Sundarbans",
      0.68, 2,   0.5,0.1, 0.2, 5.0),
-    (21.13, 70.80, 0.3, "carnivore",      "Gir",
+    (21.13, 70.80, 0.6, "carnivore",      "Gir",
      0.60, 300, 8,  0.2, 3.0, 2.0),
-    (9.46,  77.24, 0.3, "elephant",       "Periyar",
+    (9.46,  77.24, 0.6, "elephant",       "Periyar",
      0.82, 900, 20, 0.1, 1.0, 2.0),
-    (26.72, 90.98, 0.4, "elephant",       "Manas",
+    (26.72, 90.98, 0.7, "elephant",       "Manas",
      0.76, 150, 5,  0.2, 1.0, 2.0),
-    (20.23, 79.40, 0.5, "carnivore",      "Tadoba-Andhari (Chandrapur)",
+    (20.23, 79.40, 0.8, "carnivore",      "Tadoba-Andhari (Chandrapur)",
      0.72, 300, 8,  0.2, 2.5, 1.5),
-    (21.33, 77.20, 0.4, "carnivore",      "Melghat",
+    (21.33, 77.20, 0.7, "carnivore",      "Melghat",
      0.75, 500, 12, 0.2, 3.0, 2.0),
 ]
 
@@ -282,13 +282,18 @@ def estimate_features_fallback(lat, lon):
         radius, (ndvi, elev, slope, df, dw, dr) = best_named
         if best_dist2 <= radius:
             blend = 1.0 - (best_dist2 / radius)
-            NDVI  = ndvi*blend + 0.18*(1-blend)
-            NDWI  = 0.30*blend + 0.08*(1-blend)
-            elev  = elev*blend + 300*(1-blend)
-            slope = slope*blend + 2*(1-blend)
-            df    = df*blend + 9.0*(1-blend)
-            dw    = dw*blend + 5.0*(1-blend)
-            dr    = dr*blend + 0.4*(1-blend)
+            # Floor here represents "somewhere in the district surrounding
+            # a known reserve" (still meaningfully rural/forest-adjacent),
+            # not the flat "middle of nowhere" default used elsewhere —
+            # otherwise a town 30km from a reserve (a very normal
+            # geocoding result) collapses back to a near-zero score.
+            NDVI  = ndvi*blend + 0.35*(1-blend)
+            NDWI  = 0.30*blend + 0.15*(1-blend)
+            elev  = elev*blend + 250*(1-blend)
+            slope = slope*blend + 3*(1-blend)
+            df    = df*blend + 4.0*(1-blend)
+            dw    = dw*blend + 3.5*(1-blend)
+            dr    = dr*blend + 1.5*(1-blend)
             return NDVI, NDWI, elev, slope, df, dw, dr
 
     if in_ghats:
@@ -329,6 +334,47 @@ def get_location_name(lat, lon):
         best_name = f"({lat:.2f}, {lon:.2f})"
     return best_name
 
+# ── Documented baseline severity (0-100) for named zones, from public
+# conflict reporting. Used INSTEAD of the ML model for these zones — the
+# model was fit on South India's numeric patterns and has no real basis
+# for extrapolating to these coordinates; a transparent, documented
+# number is more honest than an opaque model guess. ──
+NAMED_ZONE_SEVERITY = {
+    "Pilibhit Tiger Reserve": 82,   # frequent, well-documented fatalities
+    "Corbett": 55,
+    "Dudhwa": 65,                   # same Terai belt/pattern as Pilibhit
+    "Kaziranga": 60,                # frequent elephant crop-raiding
+    "Kanha": 50,
+    "Bandhavgarh": 50,
+    "Ranthambore": 45,
+    "Similipal": 50,
+    "Sundarbans": 80,               # well-documented high-fatality attacks
+    "Gir": 35,                      # mostly livestock predation, rare human attacks
+    "Periyar": 40,
+    "Manas": 45,
+    "Tadoba-Andhari (Chandrapur)": 80,  # among India's highest recent fatality rates
+    "Melghat": 45,
+}
+
+def get_named_zone_match(lat, lon):
+    """Returns (name, blend 0-1, severity) for the nearest named zone the
+    point falls within, or None. blend=1 at the zone center, 0 at the
+    radius edge."""
+    best_dist, best_zone = float('inf'), None
+    for zone in NAMED_TIME_ZONES:
+        zlat, zlon, radius, _profile, name = zone[:5]
+        d = math.sqrt((lat - zlat)**2 + (lon - zlon)**2)
+        if d < best_dist:
+            best_dist, best_zone = d, (name, radius)
+    if best_zone is None:
+        return None
+    name, radius = best_zone
+    if best_dist > radius:
+        return None
+    blend = 1.0 - (best_dist / radius)
+    severity = NAMED_ZONE_SEVERITY.get(name, 45)
+    return name, blend, severity
+
 def get_time_profile(lat, lon):
     best_dist, best_profile = float('inf'), None
     for zone in FOREST_ZONES:
@@ -357,6 +403,40 @@ def run_prediction(lat: float, lon: float, hour: Optional[int] = None):
             "lat": lat, "lon": lon,
         }
 
+    hour_used = hour if hour is not None else datetime.now(IST).hour
+    hour_used = max(0, min(23, hour_used))
+    profile = get_time_profile(lat, lon)
+    multiplier = TIME_PROFILES[profile][hour_used]
+
+    # Named, well-documented conflict zones (Pilibhit, Tadoba, Sundarbans,
+    # etc.) bypass the ML model: it was fit on South India's numeric
+    # patterns and has no real basis for these coordinates, so a
+    # transparent documented-severity number is more honest than an
+    # opaque model guess.
+    named_match = get_named_zone_match(lat, lon)
+    if named_match:
+        name, blend, severity = named_match
+        # Even at the radius edge (blend=0), keep some fraction of
+        # severity — a town 50-70km from a reserve is still in the same
+        # rural conflict landscape, not "safe".
+        base_prob = severity * (0.35 + 0.65 * blend)
+        adjusted_prob = max(0.0, min(100.0, base_prob * multiplier))
+        risk = "HIGH" if adjusted_prob >= 70 else "MEDIUM" if adjusted_prob >= 40 else "LOW"
+        return {
+            "risk": risk,
+            "probability": round(adjusted_prob, 2),
+            "base_probability": round(base_prob, 2),
+            "time_multiplier": round(multiplier, 2),
+            "time_profile": profile,
+            "hour_used": hour_used,
+            "location": name,
+            "driver": "documented_hotspot",
+            "used_named_zone_heuristic": True,
+            "named_zone": name,
+            "named_zone_blend": round(blend, 2),
+            "lat": lat, "lon": lon,
+        }
+
     used_fallback = False
     try:
         NDVI, NDWI, elev, slope, df, dw, dr = get_real_terrain(lat, lon)
@@ -369,10 +449,6 @@ def run_prediction(lat: float, lon: float, hour: Optional[int] = None):
     dfx = pd.DataFrame([feats], columns=FEATURES)
     base_prob = float(model.predict_proba(scaler.transform(dfx))[0][1] * 100)
 
-    hour_used = hour if hour is not None else datetime.now(IST).hour
-    hour_used = max(0, min(23, hour_used))
-    profile = get_time_profile(lat, lon)
-    multiplier = TIME_PROFILES[profile][hour_used]
     adjusted_prob = max(0.0, min(100.0, base_prob * multiplier))
 
     risk = "HIGH" if adjusted_prob >= 70 else "MEDIUM" if adjusted_prob >= 40 else "LOW"
