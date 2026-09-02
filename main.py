@@ -150,6 +150,15 @@ TIME_PROFILES = {
 _terrain_cache = {}
 _CACHE_TTL = 24 * 3600
 
+# Overpass usage policy asks for an identifying User-Agent on every
+# request. Missing this makes requests more likely to be deprioritized
+# or rejected by the public instance, which was silently causing
+# get_real_terrain() to fail and fall back to generic values for most
+# of India.
+OVERPASS_HEADERS = {
+    "User-Agent": "HWCAlertApp/1.0 (contact: your_email@example.com)"
+}
+
 
 def haversine_km(lat1, lon1, lat2, lon2):
     r = 6371.0
@@ -291,9 +300,14 @@ def get_real_terrain(lat, lon):
     out center;
     """
 
+    # NOTE: headers added — see OVERPASS_HEADERS comment above. This was
+    # missing before and is the most likely reason live terrain lookups
+    # were failing (silently falling back to generic values for most
+    # locations outside the curated zone lists).
     response = requests.post(
         "https://overpass-api.de/api/interpreter",
         data={"data": query},
+        headers=OVERPASS_HEADERS,
         timeout=20
     )
 
@@ -586,29 +600,37 @@ def estimate_features_fallback(lat, lon):
             dist_road
         )
 
-    if (
-        74 <= lon <= 77.5
-        and 10 <= lat <= 15.5
-    ):
+    # No hardcoded flat fallback here — decay smoothly based on distance
+    # to the nearest known zone (from either list), so even when the
+    # live Overpass/elevation lookup fails, results still vary by
+    # location instead of collapsing to one identical value for most
+    # of India.
+    best_dist = float("inf")
 
-        return (
-            0.50,
-            0.25,
-            500,
-            10,
-            3.0,
-            2.0,
-            1.5
+    for zone in FOREST_ZONES:
+        d = math.sqrt(
+            (lat - zone[0]) ** 2 +
+            (lon - zone[1]) ** 2
         )
+        best_dist = min(best_dist, d)
+
+    for zone in NAMED_TIME_ZONES:
+        d = math.sqrt(
+            (lat - zone[0]) ** 2 +
+            (lon - zone[1]) ** 2
+        )
+        best_dist = min(best_dist, d)
+
+    dist_factor = min(1.0, best_dist / 3.0)  # decays over ~3 degrees (~330km)
 
     return (
-        0.18,
-        0.08,
-        400,
-        2,
-        9.0,
-        5.0,
-        0.4
+        0.60 - dist_factor * 0.42,   # ndvi
+        0.30 - dist_factor * 0.22,   # ndwi
+        600 - dist_factor * 300,     # elevation
+        12 - dist_factor * 10,       # slope
+        1.5 + dist_factor * 7.5,     # dist_forest
+        0.8 + dist_factor * 4.2,     # dist_water
+        2.0 - dist_factor * 1.6,     # dist_road
     )
 
 
