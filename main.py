@@ -32,6 +32,7 @@ OTP_STEP_SECONDS = 300  # each code is valid for a 5-minute window
 
 # ── Urban zones → always LOW ─────────────────────────────────────
 URBAN_ZONES = [
+    # Karnataka / Kerala / Tamil Nadu (original coverage)
     (12.90, 77.50, 0.6, "Bengaluru"),
     (12.97, 77.59, 0.6, "Bengaluru"),
     (12.30, 76.64, 0.4, "Mysuru"),
@@ -55,6 +56,65 @@ URBAN_ZONES = [
     (10.80, 76.65, 0.3, "Palakkad City"),
     (11.25, 75.77, 0.3, "Kozhikode"),
     (10.00, 76.96, 0.3, "Kochi"),
+    (8.52, 76.94, 0.3, "Thiruvananthapuram"),
+    (9.93, 76.27, 0.3, "Kottayam"),
+    (13.08, 80.27, 0.5, "Chennai"),
+    (12.82, 80.04, 0.3, "Chengalpattu"),
+    (11.66, 78.15, 0.3, "Namakkal"),
+    (9.93, 78.12, 0.3, "Madurai South"),
+    (8.09, 77.55, 0.3, "Nagercoil"),
+
+    # North India
+    (28.61, 77.21, 0.6, "Delhi"),
+    (28.46, 77.03, 0.4, "Gurugram"),
+    (28.57, 77.32, 0.4, "Noida"),
+    (26.91, 75.79, 0.4, "Jaipur"),
+    (26.45, 80.33, 0.4, "Kanpur"),
+    (26.85, 80.95, 0.4, "Lucknow"),
+    (25.32, 82.99, 0.4, "Varanasi"),
+    (25.59, 85.14, 0.4, "Patna"),
+    (30.32, 78.03, 0.3, "Dehradun"),
+    (31.10, 77.17, 0.3, "Shimla"),
+    (30.73, 76.78, 0.3, "Chandigarh"),
+    (34.08, 74.79, 0.3, "Srinagar"),
+    (32.73, 74.86, 0.3, "Jammu"),
+    (27.18, 78.02, 0.3, "Agra"),
+    (26.23, 78.18, 0.3, "Gwalior"),
+    (23.18, 79.99, 0.3, "Jabalpur"),
+    (23.26, 77.41, 0.3, "Bhopal"),
+    (22.72, 75.86, 0.3, "Indore"),
+    (21.15, 79.09, 0.4, "Nagpur"),
+
+    # West India
+    (19.08, 72.88, 0.6, "Mumbai"),
+    (18.52, 73.86, 0.4, "Pune"),
+    (21.17, 72.83, 0.4, "Surat"),
+    (23.02, 72.57, 0.4, "Ahmedabad"),
+    (22.31, 70.80, 0.3, "Rajkot"),
+    (23.22, 72.68, 0.3, "Gandhinagar"),
+    (25.20, 75.86, 0.3, "Kota"),
+    (24.58, 73.68, 0.3, "Udaipur"),
+    (26.28, 73.02, 0.3, "Jodhpur"),
+
+    # East / Northeast India
+    (22.57, 88.36, 0.5, "Kolkata"),
+    (20.30, 85.82, 0.4, "Bhubaneswar"),
+    (23.34, 85.31, 0.3, "Ranchi"),
+    (21.25, 81.63, 0.3, "Raipur"),
+    (26.14, 91.74, 0.4, "Guwahati"),
+    (25.58, 91.89, 0.3, "Shillong"),
+    (23.83, 91.28, 0.3, "Agartala"),
+    (24.66, 93.90, 0.3, "Imphal"),
+    (25.67, 94.11, 0.3, "Kohima"),
+    (23.71, 92.72, 0.3, "Aizawl"),
+    (27.48, 94.90, 0.3, "Dibrugarh"),
+
+    # South / Andhra / Telangana
+    (17.38, 78.49, 0.5, "Hyderabad"),
+    (17.69, 83.22, 0.4, "Visakhapatnam"),
+    (16.51, 80.62, 0.3, "Vijayawada"),
+    (15.83, 78.04, 0.3, "Kurnool"),
+    (14.44, 79.99, 0.3, "Nellore"),
 ]
 
 # ── Forest zones → HIGH risk (expanded radii) ────────────────────
@@ -83,6 +143,54 @@ FOREST_ZONES = [
     (10.8, 76.7, 0.7, 0.76, 750, 14, 0.3, 0.4, 2.0, "Silent Valley"),
     (15.2, 74.6, 0.7, 0.79, 580, 17, 0.3, 0.4, 2.5, "Dandeli"),
     (12.4, 76.0, 0.9, 0.82, 860, 18, 0.2, 0.3, 2.0, "Namdroling Area"),
+
+    # ── Central India ────────────────────────────────────────────
+    (22.33, 80.65, 1.0, 0.78, 600, 10, 0.2, 0.4, 2.0, "Kanha"),
+    (23.65, 80.95, 1.0, 0.76, 550, 9, 0.2, 0.4, 2.0, "Bandhavgarh"),
+    (21.75, 79.30, 1.0, 0.75, 500, 8, 0.2, 0.4, 2.0, "Pench"),
+    (20.23, 79.35, 1.0, 0.74, 480, 8, 0.2, 0.4, 2.0, "Tadoba"),
+    (22.50, 78.35, 1.1, 0.77, 650, 12, 0.2, 0.4, 2.0, "Satpura"),
+    (21.30, 77.30, 1.0, 0.76, 700, 14, 0.2, 0.4, 2.0, "Melghat"),
+    (22.50, 81.75, 0.9, 0.75, 600, 10, 0.2, 0.5, 2.5, "Achanakmar"),
+    (19.30, 81.20, 0.9, 0.73, 450, 8, 0.3, 0.5, 3.0, "Indravati"),
+    (18.85, 78.90, 0.9, 0.72, 400, 7, 0.3, 0.5, 3.0, "Kawal"),
+    (20.90, 78.85, 0.8, 0.70, 420, 8, 0.3, 0.5, 2.5, "Navegaon-Nagzira"),
+    (23.90, 81.95, 0.8, 0.72, 500, 9, 0.3, 0.5, 2.5, "Sanjay-Dubri"),
+
+    # ── Himalayan / Terai belt ──────────────────────────────────
+    (29.53, 78.77, 1.0, 0.75, 500, 10, 0.2, 0.3, 2.0, "Corbett"),
+    (30.05, 78.20, 0.9, 0.72, 550, 12, 0.2, 0.3, 2.0, "Rajaji"),
+    (28.52, 80.60, 0.9, 0.73, 200, 5, 0.2, 0.3, 2.0, "Dudhwa"),
+    (27.35, 84.10, 0.8, 0.70, 180, 5, 0.3, 0.4, 2.5, "Valmiki"),
+    (31.75, 77.60, 1.0, 0.68, 2500, 35, 0.3, 0.4, 4.0, "Great Himalayan NP"),
+    (30.50, 79.10, 0.9, 0.62, 3000, 38, 0.4, 0.4, 5.0, "Kedarnath WLS"),
+    (32.20, 77.15, 0.9, 0.60, 2800, 34, 0.4, 0.4, 4.5, "Pin Valley/Manali"),
+    (29.35, 79.55, 0.9, 0.70, 1800, 25, 0.3, 0.4, 3.0, "Nanda Devi"),
+    (30.85, 77.85, 0.8, 0.68, 2200, 30, 0.3, 0.4, 3.5, "Govind WLS"),
+
+    # ── Northeast India ─────────────────────────────────────────
+    (26.58, 93.30, 1.0, 0.80, 90, 4, 0.1, 0.2, 2.0, "Kaziranga"),
+    (26.70, 91.00, 0.9, 0.78, 100, 5, 0.2, 0.3, 2.5, "Manas"),
+    (26.97, 92.90, 0.8, 0.76, 120, 6, 0.2, 0.3, 2.5, "Nameri"),
+    (27.50, 96.35, 0.9, 0.82, 300, 15, 0.2, 0.3, 3.5, "Namdapha"),
+    (23.75, 92.35, 0.8, 0.77, 400, 18, 0.3, 0.4, 3.0, "Dampa"),
+    (25.55, 93.35, 0.8, 0.75, 500, 20, 0.3, 0.4, 3.5, "Intanki"),
+    (25.10, 93.75, 0.8, 0.74, 450, 18, 0.3, 0.4, 3.5, "Khangchendzonga Buffer"),
+    (27.35, 88.60, 0.8, 0.72, 2000, 28, 0.3, 0.4, 3.5, "Neora Valley"),
+
+    # ── Eastern India ────────────────────────────────────────────
+    (21.60, 86.30, 0.9, 0.76, 400, 12, 0.2, 0.4, 2.5, "Simlipal"),
+    (21.90, 88.90, 0.9, 0.65, 5, 1, 0.1, 0.1, 3.0, "Sundarbans"),
+    (16.35, 78.85, 1.0, 0.72, 350, 10, 0.2, 0.4, 2.5, "Nagarjunsagar-Srisailam"),
+    (20.70, 86.90, 0.8, 0.68, 10, 2, 0.2, 0.2, 2.5, "Bhitarkanika"),
+    (22.10, 86.20, 0.7, 0.70, 300, 8, 0.3, 0.4, 3.0, "Dalma"),
+
+    # ── Western India / Rajasthan / Gujarat ─────────────────────
+    (26.02, 76.50, 0.9, 0.68, 350, 12, 0.3, 0.5, 2.0, "Ranthambore"),
+    (27.30, 76.42, 0.8, 0.65, 400, 14, 0.3, 0.5, 2.5, "Sariska"),
+    (21.15, 70.80, 0.9, 0.63, 200, 8, 0.3, 0.5, 2.5, "Gir"),
+    (24.10, 79.85, 0.7, 0.62, 300, 10, 0.3, 0.5, 2.5, "Panna"),
+    (26.90, 70.90, 1.0, 0.20, 250, 3, 0.6, 1.5, 3.0, "Desert NP"),
 ]
 
 
@@ -107,18 +215,18 @@ def estimate_features(lat, lon):
     never shown real geography for anywhere outside the box, so it
     always predicted LOW there.
 
-    Fix: there's no more bounding-box gate. Every location — inside or
-    outside the old box — gets the same distance-based estimate relative
-    to the nearest entry in FOREST_ZONES. Close to a known zone: high
-    NDVI/elevation, low distance-to-forest. Far from all zones: decays
-    smoothly toward a baseline "non-forest" profile instead of being
-    clamped instantly.
+    Fix: there's no more bounding-box gate, and FOREST_ZONES / URBAN_ZONES
+    now cover all of India (Western Ghats, Central India, Himalayan/Terai
+    belt, Northeast, Eastern India, Rajasthan/Gujarat), not just Karnataka/
+    Kerala/Tamil Nadu. Every location gets a distance-based estimate
+    relative to the nearest entry in FOREST_ZONES: close to a known zone
+    → high NDVI/elevation, low distance-to-forest; far from all zones →
+    decays smoothly toward a baseline "non-forest" profile.
 
-    Note: FOREST_ZONES currently only lists Western Ghats locations, so
-    predictions elsewhere in India (e.g. Central India, Himalayas,
-    Northeast, Sundarbans) will still decay toward baseline unless you
-    add real zones for those regions too — add entries to FOREST_ZONES
-    with your best estimates for NDVI/elevation/slope/etc for that area.
+    This is still an approximation (not live satellite data) — accuracy
+    depends on how well FOREST_ZONES/URBAN_ZONES represent the real
+    forest cover and cities near a given point. Add more entries to
+    either list to sharpen predictions in a specific area.
     """
     best_dist = float('inf')
     best_zone = None
