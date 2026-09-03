@@ -1037,17 +1037,53 @@ def predict_post(
 
 class EmailRequest(BaseModel):
     email: str
+    purpose: str
 
 
 class VerifyRequest(BaseModel):
     email: str
     otp: str
+    purpose: str
+
+
+def normalize_otp_purpose(purpose: str):
+    purpose = purpose.lower().strip()
+
+    if purpose not in ("create", "login"):
+        raise ValueError("Invalid OTP purpose")
+
+    return purpose
 
 
 def send_email_otp(
     to_email: str,
-    otp: str
+    otp: str,
+    purpose: str
 ):
+
+    purpose = normalize_otp_purpose(
+        purpose
+    )
+
+    if purpose == "create":
+        subject = "WILDORA - Verify Your Email"
+
+        message = (
+            f"Your WILDORA account verification "
+            f"code is: {otp}\n\n"
+            "Use this code to verify your email "
+            "and create your account.\n\n"
+            "Expires in 5 minutes."
+        )
+
+    else:
+        subject = "WILDORA - Login Code"
+
+        message = (
+            f"Your WILDORA login code is: {otp}\n\n"
+            "Use this code to sign in to your account.\n\n"
+            "Expires in 5 minutes."
+        )
 
     response = requests.post(
         "https://api.brevo.com/v3/smtp/email",
@@ -1061,7 +1097,7 @@ def send_email_otp(
         json={
             "sender": {
                 "email": SENDER_EMAIL,
-                "name": "HWC Alert"
+                "name": "WILDORA"
             },
 
             "to": [
@@ -1070,13 +1106,9 @@ def send_email_otp(
                 }
             ],
 
-            "subject":
-                "HWC Alert - Your Login Code",
+            "subject": subject,
 
-            "textContent":
-                f"Your HWC Alert verification "
-                f"code is: {otp}\n\n"
-                "Expires in 5 minutes."
+            "textContent": message
         },
 
         timeout=15
@@ -1093,11 +1125,22 @@ def send_email_otp(
 
 def generate_otp(
     email: str,
+    purpose: str,
     time_step: int
 ):
 
+    purpose = normalize_otp_purpose(
+        purpose
+    )
+
+    # The purpose is included in the OTP input.
+    # This guarantees that CREATE and LOGIN OTPs
+    # are different for the same email and same
+    # 5-minute time window.
+
     msg = (
         f"{email.lower().strip()}:"
+        f"{purpose}:"
         f"{time_step}"
     ).encode()
 
@@ -1117,21 +1160,42 @@ def send_otp(
     req: EmailRequest
 ):
 
+    try:
+        purpose = normalize_otp_purpose(
+            req.purpose
+        )
+
+    except ValueError:
+
+        return {
+            "error": "Invalid OTP purpose"
+        }
+
+    email = req.email.lower().strip()
+
+    if not email:
+
+        return {
+            "error": "Email is required"
+        }
+
     time_step = int(
         time.time()
         // OTP_STEP_SECONDS
     )
 
     otp = generate_otp(
-        req.email,
+        email,
+        purpose,
         time_step
     )
 
     try:
 
         send_email_otp(
-            req.email,
-            otp
+            email,
+            otp,
+            purpose
         )
 
     except Exception as error:
@@ -1142,7 +1206,8 @@ def send_otp(
         }
 
     return {
-        "message": "OTP sent"
+        "message": "OTP sent",
+        "purpose": purpose
     }
 
 
@@ -1151,27 +1216,61 @@ def verify_otp(
     req: VerifyRequest
 ):
 
+    try:
+        purpose = normalize_otp_purpose(
+            req.purpose
+        )
+
+    except ValueError:
+
+        return {
+            "error": "Invalid OTP purpose"
+        }
+
+    email = req.email.lower().strip()
+    entered = req.otp.strip()
+
+    if (
+        len(entered) != 6
+        or not entered.isdigit()
+    ):
+
+        return {
+            "error": "OTP must be 6 digits"
+        }
+
     current_step = int(
         time.time()
         // OTP_STEP_SECONDS
     )
 
-    entered = req.otp.strip()
+    current_otp = generate_otp(
+        email,
+        purpose,
+        current_step
+    )
+
+    previous_otp = generate_otp(
+        email,
+        purpose,
+        current_step - 1
+    )
 
     if (
-        generate_otp(
-            req.email,
-            current_step
-        ) == entered
+        hmac.compare_digest(
+            current_otp,
+            entered
+        )
         or
-        generate_otp(
-            req.email,
-            current_step - 1
-        ) == entered
+        hmac.compare_digest(
+            previous_otp,
+            entered
+        )
     ):
 
         return {
-            "message": "Verified"
+            "message": "Verified",
+            "purpose": purpose
         }
 
     return {
