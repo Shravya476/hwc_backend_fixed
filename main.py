@@ -11,6 +11,7 @@ import os
 import requests
 import hmac
 import hashlib
+import sqlite3
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -1038,12 +1039,155 @@ def predict_post(
 class EmailRequest(BaseModel):
     email: str
     purpose: str
+    username: Optional[str] = None
 
 
 class VerifyRequest(BaseModel):
     email: str
     otp: str
     purpose: str
+    username: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Persistent account storage
+# ---------------------------------------------------------------------------
+# If DATABASE_URL is configured (recommended for Render), PostgreSQL is used.
+# Otherwise a local SQLite database is used. SQLite survives local laptop
+# shutdowns/restarts, but a cloud deployment needs a persistent database.
+DATABASE_URL = os.environ.get("DATABASE_URL")
+
+
+def _db_connection():
+    if DATABASE_URL:
+        try:
+            import psycopg2
+            return psycopg2.connect(DATABASE_URL)
+        except Exception as error:
+            raise RuntimeError(f"Could not connect to PostgreSQL: {error}")
+
+    connection = sqlite3.connect("accounts.db", timeout=30)
+    connection.row_factory = sqlite3.Row
+    return connection
+
+
+def _init_accounts_db():
+    connection = _db_connection()
+    try:
+        cursor = connection.cursor()
+        if DATABASE_URL:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS accounts (
+                    email TEXT PRIMARY KEY,
+                    username TEXT NOT NULL,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+        else:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS accounts (
+                    email TEXT PRIMARY KEY,
+                    username TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+        connection.commit()
+    finally:
+        connection.close()
+
+
+_init_accounts_db()
+
+
+def get_account(email: str):
+    email = email.lower().strip()
+    connection = _db_connection()
+    try:
+        cursor = connection.cursor()
+        cursor.execute(
+            "SELECT email, username FROM accounts WHERE email = %s"
+            if DATABASE_URL else
+            "SELECT email, username FROM accounts WHERE email = ?",
+            (email,)
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        if DATABASE_URL:
+            return {"email": row[0], "username": row[1]}
+        return {"email": row["email"], "username": row["username"]}
+    finally:
+        connection.close()
+
+
+def create_account(email: str, username: str):
+    email = email.lower().strip()
+    username = username.strip()
+    connection = _db_connection()
+    try:
+        cursor = connection.cursor()
+        try:
+            cursor.execute(
+                "INSERT INTO accounts (email, username) VALUES (%s, %s)"
+                if DATABASE_URL else
+                "INSERT INTO accounts (email, username) VALUES (?, ?)",
+                (email, username),
+            )
+            connection.commit()
+            return True
+        except Exception:
+            connection.rollback()
+            return False
+    finally:
+        connection.close()
+
+
+def delete_account(email: str):
+    email = email.lower().strip()
+    connection = _db_connection()
+    try:
+        cursor = connection.cursor()
+        cursor.execute(
+            "DELETE FROM accounts WHERE email = %s"
+            if DATABASE_URL else
+            "DELETE FROM accounts WHERE email = ?",
+            (email,),
+        )
+        connection.commit()
+        return cursor.rowcount > 0
+    finally:
+        connection.close()
+
+
+@app.get("/account-status")
+def account_status(email: str):
+    email = email.lower().strip()
+    if not email:
+        return {"error": "Email is required"}
+
+    try:
+        account = get_account(email)
+    except Exception as error:
+        return {"error": f"Account database error: {error}"}
+
+    if account:
+        return {"exists": True, "account": account}
+
+    return {"exists": False}
+
+
+@app.delete("/account")
+def remove_account(email: str):
+    email = email.lower().strip()
+    if not email:
+        return {"error": "Email is required"}
+
+    try:
+        deleted = delete_account(email)
+    except Exception as error:
+        return {"error": f"Account database error: {error}"}
+
+    return {"deleted": deleted}
 
 
 def normalize_otp_purpose(purpose: str):
@@ -1061,24 +1205,17 @@ def send_email_otp(
     purpose: str
 ):
 
-    purpose = normalize_otp_purpose(
-        purpose
-    )
+    purpose = normalize_otp_purpose(purpose)
 
     if purpose == "create":
         subject = "WILDORA - Verify Your Email"
-
         message = (
-            f"Your WILDORA account verification "
-            f"code is: {otp}\n\n"
-            "Use this code to verify your email "
-            "and create your account.\n\n"
+            f"Your WILDORA account verification code is: {otp}\n\n"
+            "Use this code to verify your email and create your account.\n\n"
             "Expires in 5 minutes."
         )
-
     else:
         subject = "WILDORA - Login Code"
-
         message = (
             f"Your WILDORA login code is: {otp}\n\n"
             "Use this code to sign in to your account.\n\n"
@@ -1087,39 +1224,26 @@ def send_email_otp(
 
     response = requests.post(
         "https://api.brevo.com/v3/smtp/email",
-
         headers={
             "api-key": BREVO_API_KEY,
             "Content-Type": "application/json",
             "Accept": "application/json"
         },
-
         json={
             "sender": {
                 "email": SENDER_EMAIL,
                 "name": "WILDORA"
             },
-
-            "to": [
-                {
-                    "email": to_email
-                }
-            ],
-
+            "to": [{"email": to_email}],
             "subject": subject,
-
             "textContent": message
         },
-
         timeout=15
     )
 
     if response.status_code >= 300:
-
         raise Exception(
-            f"Brevo API error "
-            f"{response.status_code}: "
-            f"{response.text}"
+            f"Brevo API error {response.status_code}: {response.text}"
         )
 
 
@@ -1129,14 +1253,7 @@ def generate_otp(
     time_step: int
 ):
 
-    purpose = normalize_otp_purpose(
-        purpose
-    )
-
-    # The purpose is included in the OTP input.
-    # This guarantees that CREATE and LOGIN OTPs
-    # are different for the same email and same
-    # 5-minute time window.
+    purpose = normalize_otp_purpose(purpose)
 
     msg = (
         f"{email.lower().strip()}:"
@@ -1150,130 +1267,112 @@ def generate_otp(
         hashlib.sha256
     ).hexdigest()
 
-    return (
-        f"{int(digest, 16) % 1000000:06d}"
-    )
+    return f"{int(digest, 16) % 1000000:06d}"
 
 
 @app.post("/send-otp")
-def send_otp(
-    req: EmailRequest
-):
+def send_otp(req: EmailRequest):
 
     try:
-        purpose = normalize_otp_purpose(
-            req.purpose
-        )
-
+        purpose = normalize_otp_purpose(req.purpose)
     except ValueError:
-
-        return {
-            "error": "Invalid OTP purpose"
-        }
+        return {"error": "Invalid OTP purpose"}
 
     email = req.email.lower().strip()
-
     if not email:
+        return {"error": "Email is required"}
 
-        return {
-            "error": "Email is required"
-        }
+    # A registered email can never create a second account.
+    if purpose == "create":
+        try:
+            if get_account(email):
+                return {
+                    "error": "An account already exists for this email. Please log in."
+                }
+        except Exception as error:
+            return {"error": f"Account database error: {error}"}
 
-    time_step = int(
-        time.time()
-        // OTP_STEP_SECONDS
-    )
+    # Login is only allowed for an already-created account.
+    if purpose == "login":
+        try:
+            if not get_account(email):
+                return {
+                    "error": "No WILDORA account found for this email. Please create an account first."
+                }
+        except Exception as error:
+            return {"error": f"Account database error: {error}"}
 
-    otp = generate_otp(
-        email,
-        purpose,
-        time_step
-    )
+    time_step = int(time.time() // OTP_STEP_SECONDS)
+    otp = generate_otp(email, purpose, time_step)
 
     try:
-
-        send_email_otp(
-            email,
-            otp,
-            purpose
-        )
-
+        send_email_otp(email, otp, purpose)
     except Exception as error:
+        return {"error": f"Failed to send email: {error}"}
 
-        return {
-            "error":
-                f"Failed to send email: {error}"
-        }
-
-    return {
-        "message": "OTP sent",
-        "purpose": purpose
-    }
+    return {"message": "OTP sent", "purpose": purpose}
 
 
 @app.post("/verify-otp")
-def verify_otp(
-    req: VerifyRequest
-):
+def verify_otp(req: VerifyRequest):
 
     try:
-        purpose = normalize_otp_purpose(
-            req.purpose
-        )
-
+        purpose = normalize_otp_purpose(req.purpose)
     except ValueError:
-
-        return {
-            "error": "Invalid OTP purpose"
-        }
+        return {"error": "Invalid OTP purpose"}
 
     email = req.email.lower().strip()
     entered = req.otp.strip()
 
-    if (
-        len(entered) != 6
-        or not entered.isdigit()
+    if len(entered) != 6 or not entered.isdigit():
+        return {"error": "OTP must be 6 digits"}
+
+    current_step = int(time.time() // OTP_STEP_SECONDS)
+    current_otp = generate_otp(email, purpose, current_step)
+    previous_otp = generate_otp(email, purpose, current_step - 1)
+
+    if not (
+        hmac.compare_digest(current_otp, entered)
+        or hmac.compare_digest(previous_otp, entered)
     ):
+        return {"error": "Incorrect or expired OTP"}
+
+    if purpose == "create":
+        username = (req.username or "").strip()
+        if len(username) < 2:
+            return {"error": "Username is required to create an account"}
+
+        try:
+            # Unique email is enforced by the database, so even two devices
+            # cannot create two accounts for the same email.
+            if get_account(email):
+                return {
+                    "error": "An account already exists for this email. Please log in."
+                }
+
+            if not create_account(email, username):
+                return {
+                    "error": "An account already exists for this email. Please log in."
+                }
+        except Exception as error:
+            return {"error": f"Could not save account: {error}"}
 
         return {
-            "error": "OTP must be 6 digits"
+            "message": "Account created",
+            "purpose": purpose,
+            "account": {"email": email, "username": username}
         }
 
-    current_step = int(
-        time.time()
-        // OTP_STEP_SECONDS
-    )
+    try:
+        account = get_account(email)
+    except Exception as error:
+        return {"error": f"Account database error: {error}"}
 
-    current_otp = generate_otp(
-        email,
-        purpose,
-        current_step
-    )
-
-    previous_otp = generate_otp(
-        email,
-        purpose,
-        current_step - 1
-    )
-
-    if (
-        hmac.compare_digest(
-            current_otp,
-            entered
-        )
-        or
-        hmac.compare_digest(
-            previous_otp,
-            entered
-        )
-    ):
-
-        return {
-            "message": "Verified",
-            "purpose": purpose
-        }
+    if not account:
+        return {"error": "Account does not exist. Please create an account first."}
 
     return {
-        "error":
-            "Incorrect or expired OTP"
+        "message": "Verified",
+        "purpose": purpose,
+        "account": account
     }
