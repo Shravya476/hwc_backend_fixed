@@ -1,5 +1,4 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
@@ -12,14 +11,7 @@ import os
 import requests
 import hmac
 import hashlib
-import json
-import re
-import secrets
-from urllib.parse import quote
 from datetime import datetime
-
-import firebase_admin
-from firebase_admin import credentials, firestore, auth as firebase_auth
 from zoneinfo import ZoneInfo
 
 app = FastAPI(title="HWC Prediction API")
@@ -39,29 +31,6 @@ BREVO_API_KEY = os.environ.get("BREVO_API_KEY")
 SENDER_EMAIL = os.environ.get("SENDER_EMAIL")
 OTP_SECRET = os.environ.get("OTP_SECRET")
 OTP_STEP_SECONDS = 300
-
-# Firebase Admin is used only on the backend. The Firebase account is
-# created after the user clicks the email verification link.
-FIREBASE_SERVICE_ACCOUNT_JSON = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON")
-VERIFICATION_BASE_URL = os.environ.get(
-    "VERIFICATION_BASE_URL",
-    "https://hwc-backend-fixed.onrender.com"
-).rstrip("/")
-VERIFICATION_TTL_SECONDS = 30 * 60
-
-if not FIREBASE_SERVICE_ACCOUNT_JSON:
-    raise RuntimeError(
-        "FIREBASE_SERVICE_ACCOUNT_JSON environment variable is required"
-    )
-
-if not firebase_admin._apps:
-    firebase_admin.initialize_app(
-        credentials.Certificate(
-            json.loads(FIREBASE_SERVICE_ACCOUNT_JSON)
-        )
-    )
-
-db = firestore.client()
 
 IST = ZoneInfo("Asia/Kolkata")
 
@@ -1075,28 +1044,11 @@ class VerifyRequest(BaseModel):
     otp: str
 
 
-class PendingRegistrationRequest(BaseModel):
-    username: str
-    email: str
-
-
-def normalize_email(email: str) -> str:
-    return email.strip().lower()
-
-
-def validate_email(email: str) -> bool:
-    return bool(
-        re.fullmatch(
-            r"[^@\s]+@[^@\s]+\.[^@\s]+",
-            email
-        )
-    )
-
-
 def send_email_otp(
     to_email: str,
     otp: str
 ):
+
     response = requests.post(
         "https://api.brevo.com/v3/smtp/email",
 
@@ -1122,7 +1074,8 @@ def send_email_otp(
                 "HWC Alert - Your Login Code",
 
             "textContent":
-                f"Your HWC Alert login code is: {otp}\n\n"
+                f"Your HWC Alert verification "
+                f"code is: {otp}\n\n"
                 "Expires in 5 minutes."
         },
 
@@ -1130,77 +1083,7 @@ def send_email_otp(
     )
 
     if response.status_code >= 300:
-        raise Exception(
-            f"Brevo API error "
-            f"{response.status_code}: "
-            f"{response.text}"
-        )
 
-
-def send_email_verification_link(
-    to_email: str,
-    username: str,
-    verification_url: str
-):
-    html = f"""
-    <!DOCTYPE html>
-    <html>
-      <body style="font-family:Arial,sans-serif;line-height:1.6;color:#222;">
-        <h2>Welcome to WILDORA</h2>
-        <p>Hello {username},</p>
-        <p>
-          Click the button below to verify your email address and finish
-          creating your WILDORA account.
-        </p>
-        <p>
-          <a href="{verification_url}"
-             style="display:inline-block;padding:12px 20px;
-                    background:#2e7d32;color:white;text-decoration:none;
-                    border-radius:6px;">
-            Verify Email &amp; Create Account
-          </a>
-        </p>
-        <p>This link expires in 30 minutes and can be used only once.</p>
-        <p>If you did not request this account, you can ignore this email.</p>
-      </body>
-    </html>
-    """
-
-    text = (
-        f"Hello {username},\n\n"
-        "Verify your email and finish creating your WILDORA account:\n"
-        f"{verification_url}\n\n"
-        "This link expires in 30 minutes and can be used only once.\n"
-    )
-
-    response = requests.post(
-        "https://api.brevo.com/v3/smtp/email",
-
-        headers={
-            "api-key": BREVO_API_KEY,
-            "Content-Type": "application/json",
-            "Accept": "application/json"
-        },
-
-        json={
-            "sender": {
-                "email": SENDER_EMAIL,
-                "name": "HWC Alert"
-            },
-            "to": [
-                {
-                    "email": to_email
-                }
-            ],
-            "subject": "WILDORA - Verify Your Email",
-            "htmlContent": html,
-            "textContent": text
-        },
-
-        timeout=15
-    )
-
-    if response.status_code >= 300:
         raise Exception(
             f"Brevo API error "
             f"{response.status_code}: "
@@ -1212,6 +1095,7 @@ def generate_otp(
     email: str,
     time_step: int
 ):
+
     msg = (
         f"{email.lower().strip()}:"
         f"{time_step}"
@@ -1228,276 +1112,10 @@ def generate_otp(
     )
 
 
-@app.post("/register-pending")
-def register_pending(
-    req: PendingRegistrationRequest
-):
-    username = req.username.strip()
-    email = normalize_email(req.email)
-
-    if not username:
-        return {"error": "Username is required"}
-
-    if len(username) > 100:
-        return {"error": "Username is too long"}
-
-    if not validate_email(email):
-        return {"error": "Please enter a valid email address"}
-
-    # Do not create a Firebase account yet. The account is created only
-    # after the verification link is clicked.
-    try:
-        existing_user = firebase_auth.get_user_by_email(email)
-
-        if existing_user.email_verified:
-            return {
-                "error": "An account with this email already exists. Please sign in."
-            }
-
-        # A pre-existing unverified Firebase user is not expected with this
-        # flow, but remove it so the verification process remains consistent.
-        try:
-            firebase_auth.delete_user(existing_user.uid)
-        except Exception:
-            pass
-
-    except firebase_auth.UserNotFoundError:
-        pass
-
-    # Invalidate any older pending registrations for this email.
-    pending_query = (
-        db.collection("pending_registrations")
-        .where("email", "==", email)
-        .stream()
-    )
-
-    for document in pending_query:
-        try:
-            document.reference.delete()
-        except Exception:
-            pass
-
-    token = secrets.token_urlsafe(48)
-    expires_at = time.time() + VERIFICATION_TTL_SECONDS
-
-    db.collection("pending_registrations").document(token).set({
-        "username": username,
-        "email": email,
-        "created_at": firestore.SERVER_TIMESTAMP,
-        "expires_at": expires_at,
-        "used": False
-    })
-
-    verification_url = (
-        f"{VERIFICATION_BASE_URL}/verify-email"
-        f"?token={quote(token, safe='')}"
-    )
-
-    try:
-        send_email_verification_link(
-            email,
-            username,
-            verification_url
-        )
-    except Exception as error:
-        try:
-            db.collection("pending_registrations").document(token).delete()
-        except Exception:
-            pass
-
-        return {
-            "error": f"Failed to send verification email: {error}"
-        }
-
-    return {
-        "message": "Verification email sent"
-    }
-
-
-@app.get("/verify-email", response_class=HTMLResponse)
-def verify_email(token: str):
-    token = token.strip()
-
-    if not token:
-        return HTMLResponse(
-            content="""
-            <html>
-              <body style="font-family:Arial;text-align:center;padding:40px;">
-                <h2>Verification failed</h2>
-                <p>The verification link is missing a token.</p>
-              </body>
-            </html>
-            """,
-            status_code=400
-        )
-
-    document_ref = db.collection("pending_registrations").document(token)
-    document = document_ref.get()
-
-    if not document.exists:
-        return HTMLResponse(
-            content="""
-            <html>
-              <body style="font-family:Arial;text-align:center;padding:40px;">
-                <h2>Link invalid or already used</h2>
-                <p>Please return to WILDORA and create a new account if needed.</p>
-              </body>
-            </html>
-            """,
-            status_code=400
-        )
-
-    data = document.to_dict() or {}
-
-    if data.get("used"):
-        return HTMLResponse(
-            content="""
-            <html>
-              <body style="font-family:Arial;text-align:center;padding:40px;">
-                <h2>Link already used</h2>
-                <p>Your email verification link has already been used.</p>
-              </body>
-            </html>
-            """,
-            status_code=400
-        )
-
-    expires_at = float(data.get("expires_at", 0))
-
-    if time.time() > expires_at:
-        try:
-            document_ref.delete()
-        except Exception:
-            pass
-
-        return HTMLResponse(
-            content="""
-            <html>
-              <body style="font-family:Arial;text-align:center;padding:40px;">
-                <h2>Link expired</h2>
-                <p>This verification link has expired. Please create the account again in WILDORA.</p>
-              </body>
-            </html>
-            """,
-            status_code=400
-        )
-
-    email = normalize_email(data.get("email", ""))
-    username = str(data.get("username", "")).strip()
-
-    if not email or not username:
-        return HTMLResponse(
-            content="""
-            <html>
-              <body style="font-family:Arial;text-align:center;padding:40px;">
-                <h2>Verification failed</h2>
-                <p>The registration information is incomplete.</p>
-              </body>
-            </html>
-            """,
-            status_code=400
-        )
-
-    try:
-        # If a verified account was created while this link was pending,
-        # do not create a duplicate account.
-        try:
-            existing_user = firebase_auth.get_user_by_email(email)
-
-            if existing_user.email_verified:
-                document_ref.update({"used": True})
-                return HTMLResponse(
-                    content="""
-                    <html>
-                      <body style="font-family:Arial;text-align:center;padding:40px;">
-                        <h2>Email already verified</h2>
-                        <p>Your WILDORA account already exists.</p>
-                        <p>You can now open the WILDORA app and sign in.</p>
-                      </body>
-                    </html>
-                    """
-                )
-
-            firebase_auth.delete_user(existing_user.uid)
-
-        except firebase_auth.UserNotFoundError:
-            pass
-
-        # This is the first point at which the Firebase account is created.
-        user_record = firebase_auth.create_user(
-            email=email,
-            display_name=username,
-            email_verified=True
-        )
-
-        # Keep a simple application profile in Firestore.
-        db.collection("users").document(user_record.uid).set({
-            "uid": user_record.uid,
-            "username": username,
-            "email": email,
-            "email_verified": True,
-            "created_at": firestore.SERVER_TIMESTAMP
-        })
-
-        document_ref.update({
-            "used": True,
-            "verified_uid": user_record.uid,
-            "verified_at": firestore.SERVER_TIMESTAMP
-        })
-
-        return HTMLResponse(
-            content=f"""
-            <!DOCTYPE html>
-            <html>
-              <body style="font-family:Arial,sans-serif;text-align:center;padding:40px;">
-                <h2 style="color:#2e7d32;">Email Verified Successfully!</h2>
-                <p>Welcome, {username}.</p>
-                <p>Your WILDORA account has been created.</p>
-                <p><strong>You can now open the WILDORA app and sign in with your email.</strong></p>
-              </body>
-            </html>
-            """
-        )
-
-    except Exception as error:
-        print("Email verification failed:", error)
-
-        return HTMLResponse(
-            content="""
-            <html>
-              <body style="font-family:Arial;text-align:center;padding:40px;">
-                <h2>Verification failed</h2>
-                <p>We could not complete account creation.</p>
-                <p>Please try creating the account again in WILDORA.</p>
-              </body>
-            </html>
-            """,
-            status_code=500
-        )
-
-
 @app.post("/send-otp")
 def send_otp(
     req: EmailRequest
 ):
-    email = normalize_email(req.email)
-
-    if not validate_email(email):
-        return {"error": "Please enter a valid email address"}
-
-    # Sign-in OTP is allowed only for accounts that have completed
-    # email-link verification.
-    try:
-        user = firebase_auth.get_user_by_email(email)
-    except firebase_auth.UserNotFoundError:
-        return {
-            "error": "No WILDORA account found for this email. Please create an account first."
-        }
-
-    if not user.email_verified:
-        return {
-            "error": "Please verify your email before signing in."
-        }
 
     time_step = int(
         time.time()
@@ -1505,17 +1123,19 @@ def send_otp(
     )
 
     otp = generate_otp(
-        email,
+        req.email,
         time_step
     )
 
     try:
+
         send_email_otp(
-            email,
+            req.email,
             otp
         )
 
     except Exception as error:
+
         return {
             "error":
                 f"Failed to send email: {error}"
@@ -1530,67 +1150,31 @@ def send_otp(
 def verify_otp(
     req: VerifyRequest
 ):
-    email = normalize_email(req.email)
-    entered = req.otp.strip()
-
-    try:
-        user = firebase_auth.get_user_by_email(email)
-    except firebase_auth.UserNotFoundError:
-        return {
-            "error":
-                "No WILDORA account found for this email."
-        }
-
-    if not user.email_verified:
-        return {
-            "error":
-                "Please verify your email before signing in."
-        }
 
     current_step = int(
         time.time()
         // OTP_STEP_SECONDS
     )
 
-    valid_otp = (
+    entered = req.otp.strip()
+
+    if (
         generate_otp(
-            email,
+            req.email,
             current_step
         ) == entered
         or
         generate_otp(
-            email,
+            req.email,
             current_step - 1
         ) == entered
-    )
-
-    if not valid_otp:
-        return {
-            "error":
-                "Incorrect or expired OTP"
-        }
-
-    try:
-        custom_token = firebase_auth.create_custom_token(
-            user.uid
-        )
-
-        # create_custom_token returns bytes in some firebase-admin versions.
-        if isinstance(custom_token, bytes):
-            custom_token = custom_token.decode("utf-8")
+    ):
 
         return {
-            "message": "Verified",
-            "uid": user.uid,
-            "email": user.email,
-            "username": user.display_name or "",
-            "custom_token": custom_token
+            "message": "Verified"
         }
 
-    except Exception as error:
-        print("Custom token creation failed:", error)
-
-        return {
-            "error":
-                "Could not create sign-in token"
-        }
+    return {
+        "error":
+            "Incorrect or expired OTP"
+    }
