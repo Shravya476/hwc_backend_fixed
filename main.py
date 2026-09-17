@@ -1,3 +1,4 @@
+```python
 import os
 import math
 import time
@@ -328,7 +329,6 @@ def get_real_terrain(lat, lon):
             0.90
         )
 
-        # Approximate slope from terrain context.
         slope = clamp(
             5.0
             + abs(math.sin(math.radians(lat))) * 20.0,
@@ -363,9 +363,6 @@ def get_real_terrain(lat, lon):
 # ============================================================
 
 def estimate_features_fallback(lat, lon):
-
-    # Smooth geographic/environmental approximation.
-    # No named location is hardcoded here.
 
     lat_factor = abs(
         math.sin(math.radians(lat))
@@ -429,10 +426,6 @@ def build_features(
     hour,
     minute
 ):
-
-    # --------------------------------------------------------
-    # Derived environmental variables
-    # --------------------------------------------------------
 
     vwr = (
         ndvi * ndwi
@@ -513,9 +506,6 @@ def build_features(
         "human_pressure": human_pressure,
         "eco_stress": eco_stress,
         "slope_elev_risk": slope_elev_risk,
-
-        # These are only used if the saved model
-        # was originally trained with them.
         "hour": hour,
         "minute": minute,
         "time_sin": math.sin(
@@ -554,7 +544,6 @@ def calculate_environment_context(
     dist_road
 ):
 
-    # Forest proximity is the strongest environmental signal.
     forest_score = (
         math.exp(-dist_forest / 4.0)
     )
@@ -571,8 +560,6 @@ def calculate_environment_context(
         1
     )
 
-    # High forest proximity + vegetation means
-    # stronger wildlife habitat context.
     wildlife_habitat_score = (
         0.55 * forest_score
         + 0.30 * vegetation_score
@@ -606,30 +593,11 @@ def apply_time_risk(
         + minute
     )
 
-    # --------------------------------------------------------
-    # Wildlife activity periods
-    # --------------------------------------------------------
-    #
-    # Evening/night:
-    # 18:00 - 06:00
-    #
-    # Safer daylight:
-    # 09:00 - 15:00
-    #
-    # Transition:
-    # 06:00 - 09:00
-    # 15:00 - 18:00
-    #
-    # This is a risk adjustment, NOT a replacement
-    # for the ML model.
-    # --------------------------------------------------------
-
     if (
         current_minutes >= 18 * 60
         or current_minutes < 6 * 60
     ):
 
-        # Stronger increase in forest/wildlife habitat.
         adjustment = (
             22.0 * habitat_score
         )
@@ -644,8 +612,6 @@ def apply_time_risk(
         < 15 * 60
     ):
 
-        # Daytime reduction is deliberately limited.
-        # A genuinely high-risk location remains high.
         adjustment = (
             -8.0 * habitat_score
         )
@@ -815,10 +781,6 @@ def run_prediction(
             detail="Minute must be between 0 and 59"
         )
 
-    # --------------------------------------------------------
-    # REAL TERRAIN
-    # --------------------------------------------------------
-
     terrain = get_real_terrain(
         lat,
         lon
@@ -844,10 +806,6 @@ def run_prediction(
         dist_water,
         dist_road
     ) = terrain
-
-    # --------------------------------------------------------
-    # MODEL FEATURES
-    # --------------------------------------------------------
 
     feature_df = build_features(
         lat,
@@ -906,10 +864,6 @@ def run_prediction(
             )
         )
 
-    # --------------------------------------------------------
-    # ENVIRONMENT CONTEXT
-    # --------------------------------------------------------
-
     habitat_score = calculate_environment_context(
         ndvi,
         ndwi,
@@ -918,21 +872,12 @@ def run_prediction(
         dist_road
     )
 
-    # --------------------------------------------------------
-    # TIME-AWARE ADJUSTMENT
-    # --------------------------------------------------------
-
     final_probability, time_period = apply_time_risk(
         base_probability,
         hour,
         minute,
         habitat_score
     )
-
-    # --------------------------------------------------------
-    # IMPORTANT:
-    # HIGH BASE RISK MUST STAY HIGH DURING DAYTIME
-    # --------------------------------------------------------
 
     if base_probability >= 70:
 
@@ -945,10 +890,6 @@ def run_prediction(
         final_probability
     )
 
-    # --------------------------------------------------------
-    # DRIVER
-    # --------------------------------------------------------
-
     driver = determine_driver(
         ndvi,
         ndwi,
@@ -957,18 +898,10 @@ def run_prediction(
         dist_road
     )
 
-    # --------------------------------------------------------
-    # LOCATION
-    # --------------------------------------------------------
-
     location_name = get_location_name(
         lat,
         lon
     )
-
-    # --------------------------------------------------------
-    # RESPONSE
-    # --------------------------------------------------------
 
     return {
         "risk": risk,
@@ -1300,7 +1233,25 @@ def send_email_otp(
         "SENDER_EMAIL"
     )
 
+    # --------------------------------------------------------
+    # DEBUG: CHECK ENVIRONMENT VARIABLES
+    # --------------------------------------------------------
+
+    print(
+        "OTP DEBUG - BREVO_API_KEY PRESENT:",
+        bool(api_key)
+    )
+
+    print(
+        "OTP DEBUG - SENDER_EMAIL PRESENT:",
+        bool(sender_email)
+    )
+
     if not api_key or not sender_email:
+
+        print(
+            "OTP ERROR: BREVO_API_KEY or SENDER_EMAIL is missing"
+        )
 
         return False
 
@@ -1341,9 +1292,40 @@ def send_email_otp(
             timeout=20
         )
 
-        return response.ok
+        # ----------------------------------------------------
+        # IMPORTANT DEBUG INFORMATION
+        # ----------------------------------------------------
 
-    except Exception:
+        print(
+            "BREVO STATUS:",
+            response.status_code
+        )
+
+        print(
+            "BREVO RESPONSE:",
+            response.text[:1000]
+        )
+
+        if response.ok:
+
+            print(
+                "OTP EMAIL SENT SUCCESSFULLY"
+            )
+
+            return True
+
+        print(
+            "OTP EMAIL FAILED"
+        )
+
+        return False
+
+    except Exception as e:
+
+        print(
+            "BREVO REQUEST ERROR:",
+            str(e)
+        )
 
         return False
 
@@ -1354,6 +1336,19 @@ def send_otp(
 ):
 
     email = request.email.strip().lower()
+
+    print(
+        "======================================"
+    )
+
+    print(
+        "SEND OTP REQUEST RECEIVED"
+    )
+
+    print(
+        "OTP EMAIL:",
+        email
+    )
 
     otp = generate_otp(
         email
@@ -1366,10 +1361,22 @@ def send_otp(
 
     if not sent:
 
+        print(
+            "SEND OTP RESULT: FAILED"
+        )
+
         raise HTTPException(
             status_code=500,
             detail="Unable to send OTP"
         )
+
+    print(
+        "SEND OTP RESULT: SUCCESS"
+    )
+
+    print(
+        "======================================"
+    )
 
     return {
         "success": True,
@@ -1477,5 +1484,10 @@ def startup_event():
     )
 
     print(
+        "OTP DEBUGGING: ENABLED"
+    )
+
+    print(
         "======================================"
     )
+```
