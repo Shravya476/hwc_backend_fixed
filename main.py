@@ -1,403 +1,451 @@
-import os
-import math
-import time
-import hmac
-import hashlib
-import sqlite3
-from datetime import datetime, timezone
-from zoneinfo import ZoneInfo
-
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import Optional
 import joblib
 import numpy as np
 import pandas as pd
+import math
+import time
+import os
 import requests
+import hmac
+import hashlib
+import sqlite3
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-
-
-# ============================================================
-# WILDORA HWC BACKEND
-# ML + ENVIRONMENT + TIME-AWARE RISK
-# ============================================================
-
-app = FastAPI(
-    title="HWC Prediction API",
-    version="2.0"
-)
+app = FastAPI(title="HWC Prediction API")
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+model = joblib.load("P5model.pkl")
+scaler = joblib.load("P5scaler.pkl")
+FEATURES = joblib.load("P5feature_columns.pkl")
 
-# ============================================================
-# CONFIGURATION
-# ============================================================
+BREVO_API_KEY = os.environ.get("BREVO_API_KEY")
+SENDER_EMAIL = os.environ.get("SENDER_EMAIL")
+OTP_SECRET = os.environ.get("OTP_SECRET")
+OTP_STEP_SECONDS = 300
 
 IST = ZoneInfo("Asia/Kolkata")
 
-MODEL_FILE = "P5model.pkl"
-SCALER_FILE = "P5scaler.pkl"
-FEATURE_FILE = "P5feature_columns.pkl"
 
-OVERPASS_URL = "https://overpass-api.de/api/interpreter"
-ELEVATION_URL = "https://api.open-elevation.com/api/v1/lookup"
-
-OVERPASS_HEADERS = {
-    "User-Agent": "WILDORA-HWC-App/2.0"
-}
-
-NOMINATIM_HEADERS = {
-    "User-Agent": "WILDORA-HWC-App/2.0"
-}
-
-TERRAIN_CACHE = {}
-CACHE_SECONDS = 24 * 60 * 60
-
-
-# ============================================================
-# LOAD MODEL
-# ============================================================
-
-try:
-    model = joblib.load(MODEL_FILE)
-    scaler = joblib.load(SCALER_FILE)
-    FEATURES = list(joblib.load(FEATURE_FILE))
-
-    MODEL_LOADED = True
-
-except Exception as e:
-    model = None
-    scaler = None
-    FEATURES = []
-
-    MODEL_LOADED = False
-    MODEL_LOAD_ERROR = str(e)
-
-
-# ============================================================
-# ORIGINAL 21 FEATURES
-# ============================================================
-
-ORIGINAL_FEATURES = [
-    "lat",
-    "lon",
-    "ndvi",
-    "ndwi",
-    "elevation",
-    "slope",
-    "dist_forest",
-    "dist_water",
-    "dist_road",
-    "vwr",
-    "tri",
-    "nld",
-    "has",
-    "esi",
-    "ndvi_ndwi_interaction",
-    "veg_water_risk",
-    "isolation_index",
-    "terrain_ratio",
-    "human_pressure",
-    "eco_stress",
-    "slope_elev_risk",
+URBAN_ZONES = [
+    (12.90, 77.50, 0.6, "Bengaluru"),
+    (12.97, 77.59, 0.6, "Bengaluru"),
+    (12.30, 76.64, 0.4, "Mysuru"),
+    (12.87, 74.88, 0.3, "Mangaluru"),
+    (13.00, 76.10, 0.3, "Hassan"),
+    (11.02, 76.96, 0.3, "Coimbatore"),
+    (10.52, 76.21, 0.3, "Thrissur"),
+    (13.34, 77.10, 0.3, "Tumkur"),
+    (12.52, 76.90, 0.3, "Mandya"),
+    (11.34, 77.72, 0.3, "Erode"),
+    (11.65, 78.15, 0.3, "Salem"),
+    (10.00, 77.00, 0.3, "Madurai"),
+    (13.93, 75.57, 0.3, "Shimoga City"),
+    (12.72, 77.28, 0.3, "Ramanagara"),
+    (12.65, 77.20, 0.3, "Channapatna"),
+    (13.13, 78.13, 0.3, "Kolar"),
+    (13.43, 77.73, 0.3, "Chikkaballapur"),
+    (15.14, 76.92, 0.3, "Bellary"),
+    (14.47, 75.92, 0.3, "Davangere"),
+    (15.13, 75.71, 0.3, "Hubli"),
+    (10.80, 76.65, 0.3, "Palakkad City"),
+    (11.25, 75.77, 0.3, "Kozhikode"),
+    (10.00, 76.96, 0.3, "Kochi"),
 ]
 
 
-# ============================================================
-# REQUEST MODELS
-# ============================================================
+FOREST_ZONES = [
+    (11.9, 76.1, 1.0, 0.82, 900, 12, 0.2, 0.4, 1.5, "Nagarhole", "elephant"),
+    (11.6, 76.4, 1.0, 0.80, 860, 15, 0.2, 0.3, 1.8, "Bandipur", "elephant"),
+    (11.6, 76.1, 1.0, 0.85, 790, 18, 0.1, 0.2, 1.6, "Wayanad", "elephant"),
+    (12.4, 75.7, 1.0, 0.84, 1000, 22, 0.2, 0.3, 2.0, "Kodagu", "elephant"),
+    (13.1, 75.3, 0.8, 0.86, 1100, 26, 0.2, 0.3, 2.5, "Kudremukh", "carnivore"),
+    (11.9, 77.0, 0.8, 0.76, 1050, 20, 0.3, 0.5, 2.0, "BRT Hills", "elephant"),
+    (11.5, 77.2, 0.8, 0.74, 820, 16, 0.3, 0.5, 2.2, "Sathyamangalam", "elephant"),
+    (10.5, 76.9, 0.8, 0.80, 880, 17, 0.2, 0.4, 2.0, "Anamalai", "elephant"),
+    (11.4, 76.7, 0.8, 0.78, 1100, 24, 0.2, 0.3, 2.5, "Nilgiris", "elephant"),
+    (13.5, 75.7, 0.8, 0.77, 830, 14, 0.2, 0.4, 2.0, "Bhadra", "carnivore"),
+    (13.3, 75.8, 0.7, 0.80, 900, 16, 0.2, 0.3, 2.0, "Chikmagalur Forest", "carnivore"),
+    (12.6, 75.7, 0.7, 0.83, 1000, 22, 0.2, 0.3, 2.0, "Pushpagiri", "carnivore"),
+    (14.0, 74.8, 0.7, 0.80, 680, 16, 0.2, 0.2, 2.5, "Sharavathi", "carnivore"),
+    (13.4, 75.1, 0.7, 0.85, 820, 22, 0.2, 0.3, 2.5, "Agumbe", "carnivore"),
+    (14.6, 74.8, 0.7, 0.78, 600, 18, 0.3, 0.4, 3.0, "Sirsi", "carnivore"),
+    (11.2, 77.5, 0.7, 0.79, 940, 20, 0.2, 0.3, 2.5, "Kalakad", "elephant"),
+    (12.0, 75.5, 0.8, 0.80, 850, 18, 0.2, 0.3, 2.0, "Coorg Buffer", "elephant"),
+    (12.5, 76.0, 0.7, 0.81, 870, 19, 0.2, 0.3, 2.0, "Kabini", "elephant"),
+    (12.2, 75.9, 0.7, 0.82, 880, 20, 0.2, 0.3, 2.0, "Brahmagiri", "elephant"),
+    (11.0, 76.5, 0.7, 0.78, 820, 16, 0.2, 0.4, 2.0, "Palakkad Gap", "elephant"),
+    (10.8, 76.7, 0.7, 0.76, 750, 14, 0.3, 0.4, 2.0, "Silent Valley", "carnivore"),
+    (15.2, 74.6, 0.7, 0.79, 580, 17, 0.3, 0.4, 2.5, "Dandeli", "carnivore"),
+    (12.4, 76.0, 0.9, 0.82, 860, 18, 0.2, 0.3, 2.0, "Namdroling Area", "elephant"),
+]
 
-class PredictionRequest(BaseModel):
-    lat: float
-    lon: float
-    hour: int = 12
-    minute: int = 0
+
+NAMED_TIME_ZONES = [
+    (28.62, 79.80, 0.7, "diurnal_worker", "Pilibhit Tiger Reserve", 0.72, 150, 3, 0.3, 2.0, 1.0),
+    (29.53, 78.77, 0.8, "mixed", "Corbett", 0.78, 600, 15, 0.2, 1.5, 1.5),
+    (28.52, 80.60, 0.7, "mixed", "Dudhwa", 0.74, 150, 3, 0.2, 2.0, 1.0),
+    (26.58, 93.17, 0.8, "elephant", "Kaziranga", 0.70, 60, 1, 0.3, 0.5, 2.0),
+    (22.33, 80.63, 0.7, "carnivore", "Kanha", 0.76, 600, 8, 0.2, 3.0, 2.0),
+    (23.68, 80.95, 0.6, "carnivore", "Bandhavgarh", 0.74, 800, 12, 0.2, 3.0, 2.0),
+    (26.02, 76.50, 0.6, "carnivore", "Ranthambore", 0.55, 400, 10, 0.3, 2.0, 2.0),
+    (21.60, 86.30, 0.7, "mixed", "Similipal", 0.78, 600, 12, 0.2, 3.0, 3.0),
+    (21.90, 88.90, 0.8, "diurnal_worker", "Sundarbans", 0.68, 2, 0.5, 0.1, 0.2, 5.0),
+    (21.13, 70.80, 0.6, "carnivore", "Gir", 0.60, 300, 8, 0.2, 3.0, 2.0),
+    (9.46, 77.24, 0.6, "elephant", "Periyar", 0.82, 900, 20, 0.1, 1.0, 2.0),
+    (26.72, 90.98, 0.7, "elephant", "Manas", 0.76, 150, 5, 0.2, 1.0, 2.0),
+    (20.23, 79.40, 0.8, "carnivore", "Tadoba-Andhari (Chandrapur)", 0.72, 300, 8, 0.2, 2.5, 1.5),
+    (21.33, 77.20, 0.7, "carnivore", "Melghat", 0.75, 500, 12, 0.2, 3.0, 2.0),
+]
 
 
-class RegisterRequest(BaseModel):
-    email: str
-    username: str
-    password: str
+REGION_PROFILES = [
+    (8.0, 16.0, 74.0, 77.5, "elephant"),
+    (18.0, 24.0, 77.0, 83.0, "carnivore"),
+    (26.0, 30.0, 77.0, 89.0, "mixed"),
+    (21.0, 23.0, 88.0, 90.5, "diurnal_worker"),
+    (24.0, 29.0, 89.0, 97.0, "carnivore"),
+]
 
 
-class OTPRequest(BaseModel):
-    email: str
-    otp: str
+TIME_PROFILES = {
+    "elephant": [
+        0.80, 0.70, 0.70, 0.75, 0.90, 1.30,
+        1.45, 1.35, 1.00, 0.80, 0.70, 0.65,
+        0.60, 0.65, 0.70, 0.80, 0.95, 1.20,
+        1.45, 1.40, 1.20, 1.00, 0.90, 0.85
+    ],
+
+    "carnivore": [
+        1.30, 1.40, 1.45, 1.35, 1.20, 1.00,
+        0.85, 0.75, 0.70, 0.65, 0.60, 0.60,
+        0.60, 0.60, 0.65, 0.70, 0.80, 0.90,
+        1.00, 1.10, 1.20, 1.25, 1.35, 1.40
+    ],
+
+    "diurnal_worker": [
+        0.60, 0.55, 0.55, 0.60, 0.70, 0.90,
+        1.10, 1.30, 1.40, 1.35, 1.25, 1.15,
+        1.05, 1.10, 1.20, 1.25, 1.15, 1.00,
+        0.85, 0.70, 0.65, 0.60, 0.58, 0.58
+    ],
+
+    "mixed": [
+        0.95, 0.90, 0.90, 0.92, 0.95, 1.05,
+        1.10, 1.15, 1.05, 1.00, 0.95, 0.92,
+        0.90, 0.92, 0.95, 1.00, 1.05, 1.10,
+        1.15, 1.10, 1.05, 1.00, 0.97, 0.95
+    ],
+}
 
 
-# ============================================================
-# BASIC HELPERS
-# ============================================================
+_terrain_cache = {}
+_CACHE_TTL = 24 * 3600
 
-def clamp(value, minimum, maximum):
-    return max(minimum, min(maximum, value))
+# Overpass usage policy asks for an identifying User-Agent on every
+# request. Missing this makes requests more likely to be deprioritized
+# or rejected by the public instance, which was silently causing
+# get_real_terrain() to fail and fall back to generic values for most
+# of India.
+OVERPASS_HEADERS = {
+    "User-Agent": "HWCAlertApp/1.0 (contact: your_email@example.com)"
+}
 
 
 def haversine_km(lat1, lon1, lat2, lon2):
-    R = 6371.0
+    r = 6371.0
 
     p1 = math.radians(lat1)
     p2 = math.radians(lat2)
 
-    dp = math.radians(lat2 - lat1)
-    dl = math.radians(lon2 - lon1)
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
 
     a = (
-        math.sin(dp / 2) ** 2
+        math.sin(dlat / 2) ** 2
         + math.cos(p1)
         * math.cos(p2)
-        * math.sin(dl / 2) ** 2
+        * math.sin(dlon / 2) ** 2
     )
 
-    return 2 * R * math.asin(math.sqrt(a))
+    return 2 * r * math.asin(math.sqrt(a))
 
 
-# ============================================================
-# TERRAIN / ENVIRONMENT DATA
-# ============================================================
+def is_urban(lat, lon):
+    for ulat, ulon, radius, name in URBAN_ZONES:
+        if haversine_km(lat, lon, ulat, ulon) <= radius * 111:
+            return True, name
+
+    return False, None
+
+
+def get_time_profile(lat, lon):
+
+    best_dist = float("inf")
+    best_profile = "mixed"
+
+    for zone in FOREST_ZONES:
+
+        distance = math.sqrt(
+            (lat - zone[0]) ** 2 +
+            (lon - zone[1]) ** 2
+        )
+
+        if distance < best_dist:
+            best_dist = distance
+            best_profile = zone[10]
+
+    if best_dist <= 0.5:
+        return best_profile
+
+    for zone in NAMED_TIME_ZONES:
+
+        distance = math.sqrt(
+            (lat - zone[0]) ** 2 +
+            (lon - zone[1]) ** 2
+        )
+
+        if distance <= zone[2]:
+            return zone[3]
+
+    for min_lat, max_lat, min_lon, max_lon, profile in REGION_PROFILES:
+
+        if (
+            min_lat <= lat <= max_lat
+            and min_lon <= lon <= max_lon
+        ):
+            return profile
+
+    return "mixed"
+
+
+def get_exact_time_multiplier(
+    lat,
+    lon,
+    hour,
+    minute
+):
+
+    profile = get_time_profile(
+        lat,
+        lon
+    )
+
+    values = TIME_PROFILES[profile]
+
+    hour = max(
+        0,
+        min(23, int(hour))
+    )
+
+    minute = max(
+        0,
+        min(59, int(minute))
+    )
+
+    current_value = values[hour]
+
+    next_hour = (
+        hour + 1
+    ) % 24
+
+    next_value = values[next_hour]
+
+    fraction = minute / 60.0
+
+    multiplier = (
+        current_value
+        + (next_value - current_value)
+        * fraction
+    )
+
+    return profile, multiplier
+
 
 def get_real_terrain(lat, lon):
 
-    cache_key = (
-        round(lat, 4),
-        round(lon, 4)
+    key = (
+        round(lat, 3),
+        round(lon, 3)
     )
 
-    if cache_key in TERRAIN_CACHE:
+    cached = _terrain_cache.get(key)
 
-        saved_time, saved_data = TERRAIN_CACHE[cache_key]
+    if cached:
+        if (
+            time.time() - cached["time"]
+            < _CACHE_TTL
+        ):
+            return cached["data"]
 
-        if time.time() - saved_time < CACHE_SECONDS:
-            return saved_data
+    query = f"""
+    [out:json][timeout:15];
 
-    try:
+    (
+      way["natural"="wood"](around:8000,{lat},{lon});
+      way["landuse"="forest"](around:8000,{lat},{lon});
+      way["natural"="water"](around:8000,{lat},{lon});
+      way["waterway"](around:8000,{lat},{lon});
+      way["highway"](around:5000,{lat},{lon});
+    );
 
-        query = f"""
-        [out:json][timeout:20];
+    out center;
+    """
 
-        (
-          way["natural"="forest"](around:10000,{lat},{lon});
-          way["landuse"="forest"](around:10000,{lat},{lon});
-          relation["landuse"="forest"](around:10000,{lat},{lon});
+    # NOTE: headers added — see OVERPASS_HEADERS comment above. This was
+    # missing before and is the most likely reason live terrain lookups
+    # were failing (silently falling back to generic values for most
+    # locations outside the curated zone lists).
+    response = requests.post(
+        "https://overpass-api.de/api/interpreter",
+        data={"data": query},
+        headers=OVERPASS_HEADERS,
+        timeout=20
+    )
 
-          way["natural"="water"](around:10000,{lat},{lon});
-          way["waterway"](around:10000,{lat},{lon});
+    response.raise_for_status()
 
-          way["highway"](around:5000,{lat},{lon});
-        );
+    elements = response.json().get(
+        "elements",
+        []
+    )
 
-        out center;
-        """
+    dist_forest = None
+    dist_water = None
+    dist_road = None
 
-        response = requests.post(
-            OVERPASS_URL,
-            data=query,
-            headers=OVERPASS_HEADERS,
-            timeout=30
+    for element in elements:
+
+        center = element.get("center")
+
+        if not center:
+            continue
+
+        distance = haversine_km(
+            lat,
+            lon,
+            center["lat"],
+            center["lon"]
         )
 
-        response.raise_for_status()
-
-        elements = response.json().get("elements", [])
-
-        forest_distances = []
-        water_distances = []
-        road_distances = []
-
-        for element in elements:
-
-            tags = element.get("tags", {})
-
-            center = element.get("center")
-
-            if not center:
-                continue
-
-            elat = center.get("lat")
-            elon = center.get("lon")
-
-            if elat is None or elon is None:
-                continue
-
-            distance = haversine_km(
-                lat,
-                lon,
-                float(elat),
-                float(elon)
-            )
-
-            if (
-                tags.get("natural") == "forest"
-                or tags.get("landuse") == "forest"
-            ):
-                forest_distances.append(distance)
-
-            if (
-                tags.get("natural") == "water"
-                or "waterway" in tags
-            ):
-                water_distances.append(distance)
-
-            if "highway" in tags:
-                road_distances.append(distance)
-
-        dist_forest = (
-            min(forest_distances)
-            if forest_distances
-            else 8.0
+        tags = element.get(
+            "tags",
+            {}
         )
 
-        dist_water = (
-            min(water_distances)
-            if water_distances
-            else 5.0
-        )
+        if (
+            tags.get("natural") == "wood"
+            or tags.get("landuse") == "forest"
+        ):
 
-        dist_road = (
-            min(road_distances)
-            if road_distances
-            else 3.0
-        )
+            if dist_forest is None:
+                dist_forest = distance
+            else:
+                dist_forest = min(
+                    dist_forest,
+                    distance
+                )
 
-        # ----------------------------------------------------
-        # ELEVATION
-        # ----------------------------------------------------
+        elif (
+            tags.get("natural") == "water"
+            or "waterway" in tags
+        ):
 
-        elevation = 500.0
+            if dist_water is None:
+                dist_water = distance
+            else:
+                dist_water = min(
+                    dist_water,
+                    distance
+                )
 
-        try:
+        elif "highway" in tags:
 
-            elev_response = requests.get(
-                ELEVATION_URL,
-                params={
-                    "locations": f"{lat},{lon}"
+            if dist_road is None:
+                dist_road = distance
+            else:
+                dist_road = min(
+                    dist_road,
+                    distance
+                )
+
+    if dist_forest is None:
+        dist_forest = 9.0
+
+    if dist_water is None:
+        dist_water = 5.0
+
+    if dist_road is None:
+        dist_road = 0.4
+
+    elevation_response = requests.post(
+        "https://api.open-elevation.com/api/v1/lookup",
+        json={
+            "locations": [
+                {
+                    "latitude": lat,
+                    "longitude": lon
                 },
-                timeout=20
-            )
-
-            if elev_response.ok:
-
-                result = elev_response.json()
-
-                if result.get("results"):
-
-                    elevation = float(
-                        result["results"][0].get(
-                            "elevation",
-                            500
-                        )
-                    )
-
-        except Exception:
-            pass
-
-        # ----------------------------------------------------
-        # ENVIRONMENT ESTIMATION
-        # ----------------------------------------------------
-
-        forest_factor = math.exp(
-            -dist_forest / 5.0
-        )
-
-        water_factor = math.exp(
-            -dist_water / 3.0
-        )
-
-        road_factor = math.exp(
-            -dist_road / 2.0
-        )
-
-        ndvi = clamp(
-            0.15
-            + 0.75 * forest_factor,
-            0.05,
-            0.95
-        )
-
-        ndwi = clamp(
-            0.05
-            + 0.65 * water_factor,
-            -0.20,
-            0.90
-        )
-
-        slope = clamp(
-            5.0
-            + abs(math.sin(math.radians(lat))) * 20.0,
-            0,
-            45
-        )
-
-        data = (
-            ndvi,
-            ndwi,
-            elevation,
-            slope,
-            dist_forest,
-            dist_water,
-            dist_road
-        )
-
-        TERRAIN_CACHE[cache_key] = (
-            time.time(),
-            data
-        )
-
-        return data
-
-    except Exception:
-
-        return None
-
-
-# ============================================================
-# FALLBACK ENVIRONMENT
-# ============================================================
-
-def estimate_features_fallback(lat, lon):
-
-    lat_factor = abs(
-        math.sin(math.radians(lat))
+                {
+                    "latitude": lat + 0.003,
+                    "longitude": lon
+                },
+                {
+                    "latitude": lat,
+                    "longitude": lon + 0.003
+                }
+            ]
+        },
+        timeout=15
     )
 
-    lon_factor = abs(
-        math.cos(math.radians(lon))
+    elevation_response.raise_for_status()
+
+    results = elevation_response.json()["results"]
+
+    elevation = results[0]["elevation"]
+
+    dz_lat = abs(
+        results[1]["elevation"]
+        - elevation
     )
 
-    ndvi = clamp(
-        0.30 + 0.35 * lat_factor,
-        0.10,
-        0.85
+    dz_lon = abs(
+        results[2]["elevation"]
+        - elevation
     )
 
-    ndwi = clamp(
-        0.15 + 0.20 * lon_factor,
-        -0.10,
-        0.70
+    slope = min(
+        45.0,
+        (max(dz_lat, dz_lon) / 300.0) * 100
     )
 
-    elevation = 500 + (
-        abs(lat - 12.5) * 40
+    ndvi = max(
+        0.15,
+        min(
+            0.88,
+            0.85 - dist_forest * 0.08
+        )
     )
 
-    slope = clamp(
-        8 + lat_factor * 15,
-        0,
-        35
+    ndwi = max(
+        0.05,
+        min(
+            0.35,
+            0.35 - dist_water * 0.05
+        )
     )
 
-    dist_forest = 4.0
-    dist_water = 3.0
-    dist_road = 1.5
-
-    return (
+    data = (
         ndvi,
         ndwi,
         elevation,
@@ -407,10 +455,185 @@ def estimate_features_fallback(lat, lon):
         dist_road
     )
 
+    _terrain_cache[key] = {
+        "time": time.time(),
+        "data": data
+    }
 
-# ============================================================
-# BUILD MODEL FEATURES
-# ============================================================
+    return data
+
+
+def estimate_features_fallback(lat, lon):
+
+    best_dist = float("inf")
+    best_zone = None
+
+    for zone in FOREST_ZONES:
+
+        distance = math.sqrt(
+            (lat - zone[0]) ** 2 +
+            (lon - zone[1]) ** 2
+        )
+
+        if distance < best_dist:
+            best_dist = distance
+            best_zone = zone
+
+    if (
+        best_zone is not None
+        and best_dist <= best_zone[2]
+    ):
+
+        blend = 1 - (
+            best_dist / best_zone[2]
+        )
+
+        ndvi = (
+            best_zone[3] * blend
+            + 0.18 * (1 - blend)
+        )
+
+        ndwi = (
+            0.35 * blend
+            + 0.08 * (1 - blend)
+        )
+
+        elevation = (
+            best_zone[4] * blend
+            + 300 * (1 - blend)
+        )
+
+        slope = (
+            best_zone[5] * blend
+            + 2 * (1 - blend)
+        )
+
+        dist_forest = (
+            best_zone[6] * blend
+            + 9 * (1 - blend)
+        )
+
+        dist_water = (
+            best_zone[7] * blend
+            + 5 * (1 - blend)
+        )
+
+        dist_road = (
+            best_zone[8] * blend
+            + 0.4 * (1 - blend)
+        )
+
+        return (
+            ndvi,
+            ndwi,
+            elevation,
+            slope,
+            dist_forest,
+            dist_water,
+            dist_road
+        )
+
+    best_dist = float("inf")
+    best_zone = None
+
+    for zone in NAMED_TIME_ZONES:
+
+        distance = math.sqrt(
+            (lat - zone[0]) ** 2 +
+            (lon - zone[1]) ** 2
+        )
+
+        if distance < best_dist:
+            best_dist = distance
+            best_zone = zone
+
+    if (
+        best_zone is not None
+        and best_dist <= best_zone[2]
+    ):
+
+        blend = 1 - (
+            best_dist / best_zone[2]
+        )
+
+        ndvi = (
+            best_zone[5] * blend
+            + 0.35 * (1 - blend)
+        )
+
+        ndwi = (
+            0.30 * blend
+            + 0.15 * (1 - blend)
+        )
+
+        elevation = (
+            best_zone[6] * blend
+            + 250 * (1 - blend)
+        )
+
+        slope = (
+            best_zone[7] * blend
+            + 3 * (1 - blend)
+        )
+
+        dist_forest = (
+            best_zone[8] * blend
+            + 4 * (1 - blend)
+        )
+
+        dist_water = (
+            best_zone[9] * blend
+            + 3.5 * (1 - blend)
+        )
+
+        dist_road = (
+            best_zone[10] * blend
+            + 1.5 * (1 - blend)
+        )
+
+        return (
+            ndvi,
+            ndwi,
+            elevation,
+            slope,
+            dist_forest,
+            dist_water,
+            dist_road
+        )
+
+    # No hardcoded flat fallback here — decay smoothly based on distance
+    # to the nearest known zone (from either list), so even when the
+    # live Overpass/elevation lookup fails, results still vary by
+    # location instead of collapsing to one identical value for most
+    # of India.
+    best_dist = float("inf")
+
+    for zone in FOREST_ZONES:
+        d = math.sqrt(
+            (lat - zone[0]) ** 2 +
+            (lon - zone[1]) ** 2
+        )
+        best_dist = min(best_dist, d)
+
+    for zone in NAMED_TIME_ZONES:
+        d = math.sqrt(
+            (lat - zone[0]) ** 2 +
+            (lon - zone[1]) ** 2
+        )
+        best_dist = min(best_dist, d)
+
+    dist_factor = min(1.0, best_dist / 3.0)  # decays over ~3 degrees (~330km)
+
+    return (
+        0.60 - dist_factor * 0.42,   # ndvi
+        0.30 - dist_factor * 0.22,   # ndwi
+        600 - dist_factor * 300,     # elevation
+        12 - dist_factor * 10,       # slope
+        1.5 + dist_factor * 7.5,     # dist_forest
+        0.8 + dist_factor * 4.2,     # dist_water
+        2.0 - dist_factor * 1.6,     # dist_road
+    )
+
 
 def build_features(
     lat,
@@ -421,392 +644,69 @@ def build_features(
     slope,
     dist_forest,
     dist_water,
-    dist_road,
-    hour,
-    minute
+    dist_road
 ):
 
-    vwr = (
-        ndvi * ndwi
+    vwr = ndvi / (
+        ndwi + 0.01
     )
 
-    tri = (
-        abs(slope)
-        * (1 + elevation / 1000)
+    tri = slope * 0.5
+
+    nld = min(
+        1,
+        max(
+            0,
+            (lon - 75) / 5
+        )
     )
 
-    nld = (
-        1.0 / (1.0 + dist_forest)
-    )
-
-    has = (
-        1.0 / (1.0 + dist_water)
+    has = min(
+        1,
+        max(
+            0,
+            (lat - 10) / 5
+        )
     )
 
     esi = (
-        ndvi
-        * (1.0 + has)
-    )
+        ndvi + ndwi
+    ) / 2
 
     ndvi_ndwi_interaction = (
         ndvi * ndwi
     )
 
     veg_water_risk = (
-        ndvi * (1 + ndwi)
+        ndvi /
+        (dist_water + 0.1)
     )
 
     isolation_index = (
-        1.0 / (
-            1.0
-            + dist_forest
-            + dist_water
-        )
-    )
+        dist_forest +
+        dist_road
+    ) / 2
 
     terrain_ratio = (
-        slope / (1 + elevation / 1000)
+        slope /
+        (elevation + 1)
     )
 
     human_pressure = (
-        1.0 / (1.0 + dist_road)
-    )
+        has + nld
+    ) / 2
 
     eco_stress = (
-        ndvi
-        + ndwi
-        + isolation_index
-    ) / 3.0
+        ndvi +
+        ndwi +
+        has
+    ) / 3
 
     slope_elev_risk = (
-        slope
-        * (1 + elevation / 1000)
-    )
+        slope * elevation
+    ) / 1000
 
-    values = {
-        "lat": lat,
-        "lon": lon,
-        "ndvi": ndvi,
-        "ndwi": ndwi,
-        "elevation": elevation,
-        "slope": slope,
-        "dist_forest": dist_forest,
-        "dist_water": dist_water,
-        "dist_road": dist_road,
-        "vwr": vwr,
-        "tri": tri,
-        "nld": nld,
-        "has": has,
-        "esi": esi,
-        "ndvi_ndwi_interaction": ndvi_ndwi_interaction,
-        "veg_water_risk": veg_water_risk,
-        "isolation_index": isolation_index,
-        "terrain_ratio": terrain_ratio,
-        "human_pressure": human_pressure,
-        "eco_stress": eco_stress,
-        "slope_elev_risk": slope_elev_risk,
-        "hour": hour,
-        "minute": minute,
-        "time_sin": math.sin(
-            2 * math.pi * hour / 24
-        ),
-        "time_cos": math.cos(
-            2 * math.pi * hour / 24
-        ),
-    }
-
-    row = {}
-
-    for feature in FEATURES:
-
-        if feature in values:
-            row[feature] = values[feature]
-
-        else:
-            row[feature] = 0.0
-
-    return pd.DataFrame(
-        [row],
-        columns=FEATURES
-    )
-
-
-# ============================================================
-# DETERMINE ENVIRONMENT TYPE
-# ============================================================
-
-def calculate_environment_context(
-    ndvi,
-    ndwi,
-    dist_forest,
-    dist_water,
-    dist_road
-):
-
-    forest_score = (
-        math.exp(-dist_forest / 4.0)
-    )
-
-    vegetation_score = clamp(
-        ndvi,
-        0,
-        1
-    )
-
-    water_score = clamp(
-        ndwi,
-        0,
-        1
-    )
-
-    wildlife_habitat_score = (
-        0.55 * forest_score
-        + 0.30 * vegetation_score
-        + 0.15 * water_score
-    )
-
-    wildlife_habitat_score = clamp(
-        wildlife_habitat_score,
-        0,
-        1
-    )
-
-    return wildlife_habitat_score
-
-
-# ============================================================
-# TIME-AWARE RISK ADJUSTMENT
-# ============================================================
-
-def apply_time_risk(
-    base_probability,
-    hour,
-    minute,
-    habitat_score
-):
-
-    probability = float(base_probability)
-
-    current_minutes = (
-        hour * 60
-        + minute
-    )
-
-    if (
-        current_minutes >= 18 * 60
-        or current_minutes < 6 * 60
-    ):
-
-        adjustment = (
-            22.0 * habitat_score
-        )
-
-        probability += adjustment
-
-        time_period = "HIGH_WILDLIFE_ACTIVITY"
-
-    elif (
-        9 * 60
-        <= current_minutes
-        < 15 * 60
-    ):
-
-        adjustment = (
-            -8.0 * habitat_score
-        )
-
-        probability += adjustment
-
-        time_period = "LOWER_WILDLIFE_ACTIVITY"
-
-    else:
-
-        adjustment = (
-            8.0 * habitat_score
-        )
-
-        probability += adjustment
-
-        time_period = "TRANSITION"
-
-    probability = clamp(
-        probability,
-        0,
-        100
-    )
-
-    return probability, time_period
-
-
-# ============================================================
-# RISK CATEGORY
-# ============================================================
-
-def risk_category(probability):
-
-    if probability >= 70:
-        return "HIGH"
-
-    if probability >= 40:
-        return "MEDIUM"
-
-    return "LOW"
-
-
-# ============================================================
-# PREDICTION DRIVER
-# ============================================================
-
-def determine_driver(
-    ndvi,
-    ndwi,
-    dist_forest,
-    dist_water,
-    dist_road
-):
-
-    scores = {
-        "forest_proximity": (
-            1.0 / (1.0 + dist_forest)
-        ),
-
-        "water_proximity": (
-            ndwi
-            + 1.0 / (1.0 + dist_water)
-        ),
-
-        "road_proximity": (
-            1.0 / (1.0 + dist_road)
-        ),
-
-        "vegetation": ndvi
-    }
-
-    return max(
-        scores,
-        key=scores.get
-    )
-
-
-# ============================================================
-# LOCATION NAME
-# ============================================================
-
-def get_location_name(lat, lon):
-
-    try:
-
-        response = requests.get(
-            "https://nominatim.openstreetmap.org/reverse",
-            params={
-                "lat": lat,
-                "lon": lon,
-                "format": "json",
-                "zoom": 12
-            },
-            headers=NOMINATIM_HEADERS,
-            timeout=15
-        )
-
-        if response.ok:
-
-            data = response.json()
-
-            address = data.get(
-                "address",
-                {}
-            )
-
-            for key in [
-                "city",
-                "town",
-                "village",
-                "municipality",
-                "county",
-                "state_district"
-            ]:
-
-                if address.get(key):
-                    return address[key]
-
-    except Exception:
-        pass
-
-    return "Selected location"
-
-
-# ============================================================
-# MAIN PREDICTION
-# ============================================================
-
-def run_prediction(
-    lat,
-    lon,
-    hour,
-    minute
-):
-
-    if not MODEL_LOADED:
-
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                "ML model could not be loaded: "
-                + MODEL_LOAD_ERROR
-            )
-        )
-
-    if not (
-        -90 <= lat <= 90
-        and -180 <= lon <= 180
-    ):
-
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid latitude or longitude"
-        )
-
-    if not 0 <= hour <= 23:
-
-        raise HTTPException(
-            status_code=400,
-            detail="Hour must be between 0 and 23"
-        )
-
-    if not 0 <= minute <= 59:
-
-        raise HTTPException(
-            status_code=400,
-            detail="Minute must be between 0 and 59"
-        )
-
-    terrain = get_real_terrain(
-        lat,
-        lon
-    )
-
-    used_fallback = False
-
-    if terrain is None:
-
-        terrain = estimate_features_fallback(
-            lat,
-            lon
-        )
-
-        used_fallback = True
-
-    (
-        ndvi,
-        ndwi,
-        elevation,
-        slope,
-        dist_forest,
-        dist_water,
-        dist_road
-    ) = terrain
-
-    feature_df = build_features(
+    return [
         lat,
         lon,
         ndvi,
@@ -816,214 +716,295 @@ def run_prediction(
         dist_forest,
         dist_water,
         dist_road,
-        hour,
-        minute
+        vwr,
+        tri,
+        nld,
+        has,
+        esi,
+        ndvi_ndwi_interaction,
+        veg_water_risk,
+        isolation_index,
+        terrain_ratio,
+        human_pressure,
+        eco_stress,
+        slope_elev_risk
+    ]
+
+
+def get_location_name(lat, lon):
+
+    places = [
+        (z[0], z[1], z[9])
+        for z in FOREST_ZONES
+    ]
+
+    places += [
+        (z[0], z[1], z[4])
+        for z in NAMED_TIME_ZONES
+    ]
+
+    places += [
+        (z[0], z[1], z[3])
+        for z in URBAN_ZONES
+    ]
+
+    best_distance = float("inf")
+
+    best_name = (
+        f"({lat:.4f}, {lon:.4f})"
     )
 
-    try:
+    for plat, plon, name in places:
 
-        scaled_features = scaler.transform(
-            feature_df
+        distance = math.sqrt(
+            (lat - plat) ** 2 +
+            (lon - plon) ** 2
         )
 
-        probabilities = model.predict_proba(
-            scaled_features
-        )[0]
+        if distance < best_distance:
 
-        classes = list(
-            model.classes_
+            best_distance = distance
+            best_name = name
+
+    if best_distance > 0.6:
+
+        best_name = (
+            f"({lat:.4f}, {lon:.4f})"
         )
 
-        if 1 in classes:
+    return best_name
 
-            positive_index = classes.index(1)
 
-        else:
+def run_prediction(
+    lat: float,
+    lon: float,
+    hour: Optional[int] = None,
+    minute: Optional[int] = None
+):
 
-            positive_index = len(
-                probabilities
-            ) - 1
-
-        base_probability = (
-            float(
-                probabilities[
-                    positive_index
-                ]
-            )
-            * 100
+    if not (
+        -90 <= lat <= 90
+    ):
+        raise ValueError(
+            "Invalid latitude"
         )
 
-    except Exception as e:
-
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                "Prediction failed: "
-                + str(e)
-            )
+    if not (
+        -180 <= lon <= 180
+    ):
+        raise ValueError(
+            "Invalid longitude"
         )
 
-    habitat_score = calculate_environment_context(
-        ndvi,
-        ndwi,
-        dist_forest,
-        dist_water,
-        dist_road
+    now = datetime.now(IST)
+
+    hour_used = (
+        now.hour
+        if hour is None
+        else int(hour)
     )
 
-    final_probability, time_period = apply_time_risk(
-        base_probability,
-        hour,
-        minute,
-        habitat_score
+    minute_used = (
+        now.minute
+        if minute is None
+        else int(minute)
     )
 
-    if base_probability >= 70:
-
-        final_probability = max(
-            final_probability,
-            70.0
+    if not 0 <= hour_used <= 23:
+        raise ValueError(
+            "Hour must be between 0 and 23"
         )
 
-    risk = risk_category(
-        final_probability
-    )
+    if not 0 <= minute_used <= 59:
+        raise ValueError(
+            "Minute must be between 0 and 59"
+        )
 
-    driver = determine_driver(
-        ndvi,
-        ndwi,
-        dist_forest,
-        dist_water,
-        dist_road
-    )
-
-    location_name = get_location_name(
+    urban, urban_name = is_urban(
         lat,
         lon
     )
 
+    if urban:
+
+        return {
+            "risk": "LOW",
+            "probability": 5.0,
+            "base_probability": 5.0,
+            "time_multiplier": 1.0,
+            "time_profile": "urban",
+            "hour_used": hour_used,
+            "minute_used": minute_used,
+            "time_used": (
+                f"{hour_used:02d}:"
+                f"{minute_used:02d}"
+            ),
+            "location": urban_name,
+            "driver": "urban_area",
+            "used_ml_model": False,
+            "used_fallback_terrain": False,
+            "lat": lat,
+            "lon": lon
+        }
+
+    profile, multiplier = (
+        get_exact_time_multiplier(
+            lat,
+            lon,
+            hour_used,
+            minute_used
+        )
+    )
+
+    used_fallback = False
+
+    try:
+
+        (
+            ndvi,
+            ndwi,
+            elevation,
+            slope,
+            dist_forest,
+            dist_water,
+            dist_road
+        ) = get_real_terrain(
+            lat,
+            lon
+        )
+
+    except Exception as error:
+
+        print(
+            "Terrain lookup failed:",
+            error
+        )
+
+        (
+            ndvi,
+            ndwi,
+            elevation,
+            slope,
+            dist_forest,
+            dist_water,
+            dist_road
+        ) = estimate_features_fallback(
+            lat,
+            lon
+        )
+
+        used_fallback = True
+
+    features = build_features(
+        lat,
+        lon,
+        ndvi,
+        ndwi,
+        elevation,
+        slope,
+        dist_forest,
+        dist_water,
+        dist_road
+    )
+
+    dataframe = pd.DataFrame(
+        [features],
+        columns=FEATURES
+    )
+
+    scaled = scaler.transform(
+        dataframe
+    )
+
+    base_probability = float(
+        model.predict_proba(
+            scaled
+        )[0][1] * 100
+    )
+
+    adjusted_probability = (
+        base_probability *
+        multiplier
+    )
+
+    adjusted_probability = max(
+        0,
+        min(
+            100,
+            adjusted_probability
+        )
+    )
+
+    if adjusted_probability >= 70:
+        risk = "HIGH"
+    elif adjusted_probability >= 40:
+        risk = "MEDIUM"
+    else:
+        risk = "LOW"
+
+    if ndvi > 0.65:
+        driver = "vegetation"
+    elif dist_forest < 2:
+        driver = "forest_proximity"
+    elif dist_water < 1:
+        driver = "water_proximity"
+    else:
+        driver = "environmental_features"
+
     return {
         "risk": risk,
-
         "probability": round(
-            final_probability,
+            adjusted_probability,
             2
         ),
-
         "base_probability": round(
             base_probability,
             2
         ),
-
-        "time_multiplier": 1.0,
-
-        "time_profile": time_period,
-
-        "hour_used": hour,
-
-        "minute_used": minute,
-
+        "time_multiplier": round(
+            multiplier,
+            4
+        ),
+        "time_profile": profile,
+        "hour_used": hour_used,
+        "minute_used": minute_used,
         "time_used": (
-            f"{hour:02d}:{minute:02d}"
+            f"{hour_used:02d}:"
+            f"{minute_used:02d}"
         ),
-
-        "location": location_name,
-
+        "location": get_location_name(
+            lat,
+            lon
+        ),
         "driver": driver,
-
         "used_ml_model": True,
-
         "used_fallback_terrain": used_fallback,
-
         "lat": lat,
-
-        "lon": lon,
-
-        "model_features": len(FEATURES),
-
-        "habitat_score": round(
-            habitat_score,
-            3
-        ),
-
-        "environment": {
-            "ndvi": round(
-                ndvi,
-                4
-            ),
-
-            "ndwi": round(
-                ndwi,
-                4
-            ),
-
-            "elevation": round(
-                elevation,
-                2
-            ),
-
-            "slope": round(
-                slope,
-                2
-            ),
-
-            "distance_forest_km": round(
-                dist_forest,
-                3
-            ),
-
-            "distance_water_km": round(
-                dist_water,
-                3
-            ),
-
-            "distance_road_km": round(
-                dist_road,
-                3
-            )
-        }
+        "lon": lon
     }
 
-
-# ============================================================
-# HEALTH
-# ============================================================
 
 @app.get("/health")
 def health():
-
     return {
-        "status": "ok",
-        "ml_model_loaded": MODEL_LOADED,
-        "features": len(FEATURES)
+        "status": "ok"
     }
 
-
-# ============================================================
-# ROOT
-# ============================================================
 
 @app.get("/")
 def root():
-
     return {
-        "message": "WILDORA HWC Prediction API",
-        "status": "running",
-        "ml_model_loaded": MODEL_LOADED,
-        "features": len(FEATURES)
+        "name": "HWC Prediction API",
+        "status": "live"
     }
 
-
-# ============================================================
-# GET PREDICTION
-# ============================================================
 
 @app.get("/predict")
 def predict_get(
     lat: float,
     lon: float,
-    hour: int = 12,
-    minute: int = 0
+    hour: Optional[int] = None,
+    minute: Optional[int] = None
 ):
 
     return run_prediction(
@@ -1034,458 +1015,364 @@ def predict_get(
     )
 
 
-# ============================================================
-# POST PREDICTION
-# ============================================================
+class PredictRequest(BaseModel):
+
+    lat: float
+    lon: float
+    hour: Optional[int] = None
+    minute: Optional[int] = None
+
 
 @app.post("/predict")
 def predict_post(
-    request: PredictionRequest
+    req: PredictRequest
 ):
 
     return run_prediction(
-        request.lat,
-        request.lon,
-        request.hour,
-        request.minute
+        req.lat,
+        req.lon,
+        req.hour,
+        req.minute
     )
 
 
-# ============================================================
-# DATABASE
-# ============================================================
-
-DATABASE_URL = os.getenv(
-    "DATABASE_URL"
-)
-
-DB_FILE = "wildora.db"
+class EmailRequest(BaseModel):
+    email: str
+    purpose: str
+    username: Optional[str] = None
 
 
-def get_db():
+class VerifyRequest(BaseModel):
+    email: str
+    otp: str
+    purpose: str
+    username: Optional[str] = None
 
-    connection = sqlite3.connect(
-        DB_FILE
-    )
 
+# ---------------------------------------------------------------------------
+# Persistent account storage
+# ---------------------------------------------------------------------------
+# If DATABASE_URL is configured (recommended for Render), PostgreSQL is used.
+# Otherwise a local SQLite database is used. SQLite survives local laptop
+# shutdowns/restarts, but a cloud deployment needs a persistent database.
+DATABASE_URL = os.environ.get("DATABASE_URL")
+
+
+def _db_connection():
+    if DATABASE_URL:
+        try:
+            import psycopg2
+            return psycopg2.connect(DATABASE_URL)
+        except Exception as error:
+            raise RuntimeError(f"Could not connect to PostgreSQL: {error}")
+
+    connection = sqlite3.connect("accounts.db", timeout=30)
     connection.row_factory = sqlite3.Row
-
     return connection
 
 
-def init_db():
-
-    connection = get_db()
-
-    cursor = connection.cursor()
-
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            email TEXT UNIQUE NOT NULL,
-            username TEXT NOT NULL,
-            password_hash TEXT NOT NULL,
-            verified INTEGER DEFAULT 0,
-            created_at TEXT
-        )
-        """
-    )
-
-    connection.commit()
-
-    connection.close()
-
-
-init_db()
-
-
-# ============================================================
-# PASSWORD HASH
-# ============================================================
-
-def hash_password(password):
-
-    return hashlib.sha256(
-        password.encode("utf-8")
-    ).hexdigest()
-
-
-# ============================================================
-# REGISTER
-# ============================================================
-
-@app.post("/register-pending")
-def register_pending(
-    request: RegisterRequest
-):
-
-    email = request.email.strip().lower()
-    username = request.username.strip()
-
-    if not email or not username or not request.password:
-
-        raise HTTPException(
-            status_code=400,
-            detail="All fields are required"
-        )
-
-    connection = get_db()
-
-    cursor = connection.cursor()
-
-    existing = cursor.execute(
-        "SELECT id FROM users WHERE email = ?",
-        (email,)
-    ).fetchone()
-
-    if existing:
-
+def _init_accounts_db():
+    connection = _db_connection()
+    try:
+        cursor = connection.cursor()
+        if DATABASE_URL:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS accounts (
+                    email TEXT PRIMARY KEY,
+                    username TEXT NOT NULL,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+        else:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS accounts (
+                    email TEXT PRIMARY KEY,
+                    username TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+        connection.commit()
+    finally:
         connection.close()
 
-        raise HTTPException(
-            status_code=400,
-            detail="Account already exists"
+
+_init_accounts_db()
+
+
+def get_account(email: str):
+    email = email.lower().strip()
+    connection = _db_connection()
+    try:
+        cursor = connection.cursor()
+        cursor.execute(
+            "SELECT email, username FROM accounts WHERE email = %s"
+            if DATABASE_URL else
+            "SELECT email, username FROM accounts WHERE email = ?",
+            (email,)
         )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        if DATABASE_URL:
+            return {"email": row[0], "username": row[1]}
+        return {"email": row["email"], "username": row["username"]}
+    finally:
+        connection.close()
 
-    cursor.execute(
-        """
-        INSERT INTO users
-        (
-            email,
-            username,
-            password_hash,
-            verified,
-            created_at
+
+def create_account(email: str, username: str):
+    email = email.lower().strip()
+    username = username.strip()
+    connection = _db_connection()
+    try:
+        cursor = connection.cursor()
+        try:
+            cursor.execute(
+                "INSERT INTO accounts (email, username) VALUES (%s, %s)"
+                if DATABASE_URL else
+                "INSERT INTO accounts (email, username) VALUES (?, ?)",
+                (email, username),
+            )
+            connection.commit()
+            return True
+        except Exception:
+            connection.rollback()
+            return False
+    finally:
+        connection.close()
+
+
+def delete_account(email: str):
+    email = email.lower().strip()
+    connection = _db_connection()
+    try:
+        cursor = connection.cursor()
+        cursor.execute(
+            "DELETE FROM accounts WHERE email = %s"
+            if DATABASE_URL else
+            "DELETE FROM accounts WHERE email = ?",
+            (email,),
         )
-        VALUES (?, ?, ?, 0, ?)
-        """,
-        (
-            email,
-            username,
-            hash_password(
-                request.password
-            ),
-            datetime.now(
-                timezone.utc
-            ).isoformat()
-        )
-    )
-
-    connection.commit()
-
-    connection.close()
-
-    return {
-        "success": True,
-        "message": "Account created successfully"
-    }
+        connection.commit()
+        return cursor.rowcount > 0
+    finally:
+        connection.close()
 
 
-# ============================================================
-# SEND OTP
-# ============================================================
+@app.get("/account-status")
+def account_status(email: str):
+    email = email.lower().strip()
+    if not email:
+        return {"error": "Email is required"}
 
-OTP_SECRET = os.getenv(
-    "OTP_SECRET",
-    "WILDORA_DEFAULT_SECRET"
-)
+    try:
+        account = get_account(email)
+    except Exception as error:
+        return {"error": f"Account database error: {error}"}
 
-OTP_STEP_SECONDS = 300
+    if account:
+        return {"exists": True, "account": account}
+
+    return {"exists": False}
 
 
-def generate_otp(email):
+@app.delete("/account")
+def remove_account(email: str):
+    email = email.lower().strip()
+    if not email:
+        return {"error": "Email is required"}
 
-    current_step = int(
-        time.time()
-        // OTP_STEP_SECONDS
-    )
+    try:
+        deleted = delete_account(email)
+    except Exception as error:
+        return {"error": f"Account database error: {error}"}
 
-    message = (
-        f"{email}:{current_step}"
-    )
+    return {"deleted": deleted}
 
-    digest = hmac.new(
-        OTP_SECRET.encode(),
-        message.encode(),
-        hashlib.sha256
-    ).hexdigest()
 
-    number = (
-        int(digest[:12], 16)
-        % 1000000
-    )
+def normalize_otp_purpose(purpose: str):
+    purpose = purpose.lower().strip()
 
-    return f"{number:06d}"
+    if purpose not in ("create", "login"):
+        raise ValueError("Invalid OTP purpose")
+
+    return purpose
 
 
 def send_email_otp(
-    email,
-    otp
+    to_email: str,
+    otp: str,
+    purpose: str
 ):
 
-    api_key = os.getenv(
-        "BREVO_API_KEY"
-    )
+    purpose = normalize_otp_purpose(purpose)
 
-    sender_email = os.getenv(
-        "SENDER_EMAIL"
-    )
-
-    # --------------------------------------------------------
-    # DEBUG: CHECK ENVIRONMENT VARIABLES
-    # --------------------------------------------------------
-
-    print(
-        "OTP DEBUG - BREVO_API_KEY PRESENT:",
-        bool(api_key)
-    )
-
-    print(
-        "OTP DEBUG - SENDER_EMAIL PRESENT:",
-        bool(sender_email)
-    )
-
-    if not api_key or not sender_email:
-
-        print(
-            "OTP ERROR: BREVO_API_KEY or SENDER_EMAIL is missing"
+    if purpose == "create":
+        subject = "WILDORA - Verify Your Email"
+        message = (
+            f"Your WILDORA account verification code is: {otp}\n\n"
+            "Use this code to verify your email and create your account.\n\n"
+            "Expires in 5 minutes."
+        )
+    else:
+        subject = "WILDORA - Login Code"
+        message = (
+            f"Your WILDORA login code is: {otp}\n\n"
+            "Use this code to sign in to your account.\n\n"
+            "Expires in 5 minutes."
         )
 
-        return False
-
-    payload = {
-        "sender": {
-            "email": sender_email,
-            "name": "WILDORA"
+    response = requests.post(
+        "https://api.brevo.com/v3/smtp/email",
+        headers={
+            "api-key": BREVO_API_KEY,
+            "Content-Type": "application/json",
+            "Accept": "application/json"
         },
-
-        "to": [
-            {
-                "email": email
-            }
-        ],
-
-        "subject": "WILDORA OTP",
-
-        "htmlContent": (
-            f"""
-            <h2>WILDORA</h2>
-            <p>Your OTP is:</p>
-            <h1>{otp}</h1>
-            <p>This OTP is valid for 5 minutes.</p>
-            """
-        )
-    }
-
-    try:
-
-        response = requests.post(
-            "https://api.brevo.com/v3/smtp/email",
-            headers={
-                "api-key": api_key,
-                "Content-Type":
-                    "application/json"
+        json={
+            "sender": {
+                "email": SENDER_EMAIL,
+                "name": "WILDORA"
             },
-            json=payload,
-            timeout=20
+            "to": [{"email": to_email}],
+            "subject": subject,
+            "textContent": message
+        },
+        timeout=15
+    )
+
+    if response.status_code >= 300:
+        raise Exception(
+            f"Brevo API error {response.status_code}: {response.text}"
         )
 
-        # ----------------------------------------------------
-        # IMPORTANT DEBUG INFORMATION
-        # ----------------------------------------------------
 
-        print(
-            "BREVO STATUS:",
-            response.status_code
-        )
+def generate_otp(
+    email: str,
+    purpose: str,
+    time_step: int
+):
 
-        print(
-            "BREVO RESPONSE:",
-            response.text[:1000]
-        )
+    purpose = normalize_otp_purpose(purpose)
 
-        if response.ok:
+    msg = (
+        f"{email.lower().strip()}:"
+        f"{purpose}:"
+        f"{time_step}"
+    ).encode()
 
-            print(
-                "OTP EMAIL SENT SUCCESSFULLY"
-            )
+    digest = hmac.new(
+        OTP_SECRET.encode(),
+        msg,
+        hashlib.sha256
+    ).hexdigest()
 
-            return True
-
-        print(
-            "OTP EMAIL FAILED"
-        )
-
-        return False
-
-    except Exception as e:
-
-        print(
-            "BREVO REQUEST ERROR:",
-            str(e)
-        )
-
-        return False
+    return f"{int(digest, 16) % 1000000:06d}"
 
 
 @app.post("/send-otp")
-def send_otp(
-    request: OTPRequest
-):
+def send_otp(req: EmailRequest):
 
-    email = request.email.strip().lower()
+    try:
+        purpose = normalize_otp_purpose(req.purpose)
+    except ValueError:
+        return {"error": "Invalid OTP purpose"}
 
-    print(
-        "======================================"
-    )
+    email = req.email.lower().strip()
+    if not email:
+        return {"error": "Email is required"}
 
-    print(
-        "SEND OTP REQUEST RECEIVED"
-    )
+    # A registered email can never create a second account.
+    if purpose == "create":
+        try:
+            if get_account(email):
+                return {
+                    "error": "An account already exists for this email. Please log in."
+                }
+        except Exception as error:
+            return {"error": f"Account database error: {error}"}
 
-    print(
-        "OTP EMAIL:",
-        email
-    )
+    # Login is only allowed for an already-created account.
+    if purpose == "login":
+        try:
+            if not get_account(email):
+                return {
+                    "error": "No WILDORA account found for this email. Please create an account first."
+                }
+        except Exception as error:
+            return {"error": f"Account database error: {error}"}
 
-    otp = generate_otp(
-        email
-    )
+    time_step = int(time.time() // OTP_STEP_SECONDS)
+    otp = generate_otp(email, purpose, time_step)
 
-    sent = send_email_otp(
-        email,
-        otp
-    )
+    try:
+        send_email_otp(email, otp, purpose)
+    except Exception as error:
+        return {"error": f"Failed to send email: {error}"}
 
-    if not sent:
+    return {"message": "OTP sent", "purpose": purpose}
 
-        print(
-            "SEND OTP RESULT: FAILED"
-        )
-
-        raise HTTPException(
-            status_code=500,
-            detail="Unable to send OTP"
-        )
-
-    print(
-        "SEND OTP RESULT: SUCCESS"
-    )
-
-    print(
-        "======================================"
-    )
-
-    return {
-        "success": True,
-        "message": "OTP sent successfully"
-    }
-
-
-# ============================================================
-# VERIFY OTP
-# ============================================================
 
 @app.post("/verify-otp")
-def verify_otp(
-    request: OTPRequest
-):
+def verify_otp(req: VerifyRequest):
 
-    email = request.email.strip().lower()
+    try:
+        purpose = normalize_otp_purpose(req.purpose)
+    except ValueError:
+        return {"error": "Invalid OTP purpose"}
 
-    expected = generate_otp(
-        email
-    )
+    email = req.email.lower().strip()
+    entered = req.otp.strip()
 
-    if not hmac.compare_digest(
-        request.otp,
-        expected
+    if len(entered) != 6 or not entered.isdigit():
+        return {"error": "OTP must be 6 digits"}
+
+    current_step = int(time.time() // OTP_STEP_SECONDS)
+    current_otp = generate_otp(email, purpose, current_step)
+    previous_otp = generate_otp(email, purpose, current_step - 1)
+
+    if not (
+        hmac.compare_digest(current_otp, entered)
+        or hmac.compare_digest(previous_otp, entered)
     ):
+        return {"error": "Incorrect or expired OTP"}
 
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid or expired OTP"
-        )
+    if purpose == "create":
+        username = (req.username or "").strip()
+        if len(username) < 2:
+            return {"error": "Username is required to create an account"}
 
-    connection = get_db()
+        try:
+            # Unique email is enforced by the database, so even two devices
+            # cannot create two accounts for the same email.
+            if get_account(email):
+                return {
+                    "error": "An account already exists for this email. Please log in."
+                }
 
-    cursor = connection.cursor()
+            if not create_account(email, username):
+                return {
+                    "error": "An account already exists for this email. Please log in."
+                }
+        except Exception as error:
+            return {"error": f"Could not save account: {error}"}
 
-    user = cursor.execute(
-        """
-        SELECT id, email, username
-        FROM users
-        WHERE email = ?
-        """,
-        (email,)
-    ).fetchone()
+        return {
+            "message": "Account created",
+            "purpose": purpose,
+            "account": {"email": email, "username": username}
+        }
 
-    if not user:
+    try:
+        account = get_account(email)
+    except Exception as error:
+        return {"error": f"Account database error: {error}"}
 
-        connection.close()
-
-        raise HTTPException(
-            status_code=404,
-            detail="Account not found"
-        )
-
-    cursor.execute(
-        """
-        UPDATE users
-        SET verified = 1
-        WHERE email = ?
-        """,
-        (email,)
-    )
-
-    connection.commit()
-
-    connection.close()
+    if not account:
+        return {"error": "Account does not exist. Please create an account first."}
 
     return {
-        "success": True,
-        "message": "OTP verified",
-        "email": user["email"],
-        "username": user["username"]
+        "message": "Verified",
+        "purpose": purpose,
+        "account": account
     }
-
-
-# ============================================================
-# STARTUP
-# ============================================================
-
-@app.on_event("startup")
-def startup_event():
-
-    print(
-        "======================================"
-    )
-
-    print(
-        "WILDORA HWC BACKEND STARTED"
-    )
-
-    print(
-        f"ML MODEL LOADED: {MODEL_LOADED}"
-    )
-
-    print(
-        f"MODEL FEATURES: {len(FEATURES)}"
-    )
-
-    print(
-        "RISK LEVELS: HIGH / MEDIUM / LOW"
-    )
-
-    print(
-        "TIME-AWARE RISK: ENABLED"
-    )
-
-    print(
-        "OTP DEBUGGING: ENABLED"
-    )
-
-    print(
-        "======================================"
-    )
