@@ -1,4 +1,3 @@
-```python
 import os
 import math
 import time
@@ -1490,4 +1489,3 @@ def startup_event():
     print(
         "======================================"
     )
-```
